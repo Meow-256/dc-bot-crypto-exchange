@@ -19,6 +19,11 @@ import {
   handleCheckFiatPayment,
   handleMarkAsCompletedCommand,
   handlePrivacyChoice,
+  handleFiatSendLinkButton,
+  handleFiatSendPassButton,
+  handleFiatSendCompleteButton,
+  handleFiatReceiveCompleteButton,
+  handleFiatSendModalSubmit,
   updateUsdJpyRate
 } from './ticket';
 
@@ -196,6 +201,30 @@ client.on('interactionCreate', async (interaction) => {
       } catch (error) {
         console.error('Error checking OxaPay fiat payment status:', error);
       }
+    } else if (interaction.customId.startsWith('fiat_send_link')) {
+      try {
+        await handleFiatSendLinkButton(interaction);
+      } catch (error) {
+        console.error('Error opening fiat send link modal:', error);
+      }
+    } else if (interaction.customId.startsWith('fiat_send_pass')) {
+      try {
+        await handleFiatSendPassButton(interaction);
+      } catch (error) {
+        console.error('Error opening fiat send pass modal:', error);
+      }
+    } else if (interaction.customId.startsWith('fiat_send_complete')) {
+      try {
+        await handleFiatSendCompleteButton(interaction);
+      } catch (error) {
+        console.error('Error processing fiat send complete:', error);
+      }
+    } else if (interaction.customId === 'fiat_receive_complete') {
+      try {
+        await handleFiatReceiveCompleteButton(interaction);
+      } catch (error) {
+        console.error('Error processing fiat receive complete:', error);
+      }
     }
   } else if (interaction.isStringSelectMenu()) {
     if (interaction.customId === 'exchange_type') {
@@ -223,6 +252,12 @@ client.on('interactionCreate', async (interaction) => {
         await handleAddressModalSubmit(interaction);
       } catch (error) {
         console.error('Error processing crypto address modal submit:', error);
+      }
+    } else if (interaction.customId.startsWith('submit_fiat_link') || interaction.customId.startsWith('submit_fiat_pass')) {
+      try {
+        await handleFiatSendModalSubmit(interaction);
+      } catch (error) {
+        console.error('Error processing fiat send modal submit:', error);
       }
     }
   }

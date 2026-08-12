@@ -339,6 +339,7 @@ export async function handleAmountModalSubmit(interaction: ModalSubmitInteractio
       }
 
       const fiatFeeRate = getSystemFeeRate('crypto_to_fiat');
+      const minSystemFeeUsd = 1.0;
 
       let payJpyAmount = 0;
       let takeJpyValue = 0;
@@ -347,18 +348,35 @@ export async function handleAmountModalSubmit(interaction: ModalSubmitInteractio
 
       if (mode === 'pay') {
         payJpyAmount = jpyAmount;
-        takeJpyValue = payJpyAmount * (1.0 - fiatFeeRate);
         usdAmount = payJpyAmount / usdJpyRate;
         payAmount = usdAmount / payPrice;
+        
+        const systemFeeUsd = Math.max(usdAmount * fiatFeeRate, minSystemFeeUsd);
+        const afterSystemFeeUsd = usdAmount - systemFeeUsd;
+        takeJpyValue = afterSystemFeeUsd * usdJpyRate;
       } else {
         takeJpyValue = jpyAmount;
-        payJpyAmount = takeJpyValue / (1.0 - fiatFeeRate);
-        usdAmount = payJpyAmount / usdJpyRate;
+        const takeUsdValue = takeJpyValue / usdJpyRate;
+        
+        let calculatedUsdAmount = takeUsdValue / (1.0 - fiatFeeRate);
+        if (calculatedUsdAmount * fiatFeeRate < minSystemFeeUsd) {
+          calculatedUsdAmount = takeUsdValue + minSystemFeeUsd;
+        }
+        
+        usdAmount = calculatedUsdAmount;
+        payJpyAmount = usdAmount * usdJpyRate;
         payAmount = usdAmount / payPrice;
       }
 
       const takeOption = fiatTakeOptions.find(opt => opt.value === takeSymbol);
       const takeLabel = takeOption ? takeOption.label : takeSymbol;
+
+      if (takeJpyValue < 300) {
+        await interaction.editReply({
+          content: `⚠️ 金額が少なすぎます。\n**受け取る額が最低でも 300 円以上**になるように指定してください。`
+        });
+        return;
+      }
 
       const embedInfo = interaction.message?.embeds[0];
       const specifiedModeLabel = mode === 'pay' ? '（支払う額を指定）' : '（受け取りたい額を指定）';
@@ -468,19 +486,22 @@ export async function handleAmountModalSubmit(interaction: ModalSubmitInteractio
       usdAmount = payJpyAmount / usdJpyRate;
       payAmount = usdAmount / payPrice;
 
-      const calculateData = {
-        from_currency: paySymbol,
-        to_currency: takeSymbolUpper,
-        amount: payAmount
-      };
-
-      const swapCalcResponse = await requestOxaPay('POST', '/general/swap/calculate', calculateData, generalKey);
       let swapAmount = usdAmount / takePrice;
-      if (swapCalcResponse.result === 100 || swapCalcResponse.result === 1 || swapCalcResponse.status === 200) {
-        const calcToAmount = swapCalcResponse.to_amount || swapCalcResponse.data?.to_amount;
-        if (calcToAmount) {
-          swapAmount = parseFloat(calcToAmount);
+      if (takeSymbolUpper !== 'USDT') {
+        const calculateData = {
+          from_currency: 'USDT',
+          to_currency: takeSymbolUpper,
+          amount: usdAmount
+        };
+        const swapCalcResponse = await requestOxaPay('POST', '/general/swap/calculate', calculateData, generalKey);
+        if (swapCalcResponse.result === 100 || swapCalcResponse.result === 1 || swapCalcResponse.status === 200) {
+          const calcToAmount = swapCalcResponse.to_amount || swapCalcResponse.data?.to_amount;
+          if (calcToAmount) {
+            swapAmount = parseFloat(calcToAmount);
+          }
         }
+      } else {
+        swapAmount = usdAmount; // USDT を受け取る場合はスワップ不要 (1 USD = 1 USDT)
       }
 
       const swapAmountInUsd = swapAmount * takePrice;
@@ -519,22 +540,31 @@ export async function handleAmountModalSubmit(interaction: ModalSubmitInteractio
       const swapAmountCrypto = swapAmountInUsd / takePrice;
       payAmount = swapAmountInUsd / payPrice;
 
-      const calculateData = {
-        from_currency: paySymbol,
-        to_currency: takeSymbolUpper,
-        amount: payAmount
-      };
-      const swapCalcResponse = await requestOxaPay('POST', '/general/swap/calculate', calculateData, generalKey);
-      if (swapCalcResponse.result === 100 || swapCalcResponse.result === 1 || swapCalcResponse.status === 200) {
-        const calcToAmount = parseFloat(swapCalcResponse.to_amount || swapCalcResponse.data?.to_amount || '0');
-        if (calcToAmount > 0) {
-          const ratio = swapAmountCrypto / calcToAmount;
-          payAmount = payAmount * ratio;
+      if (takeSymbolUpper !== 'USDT') {
+        const calculateData = {
+          from_currency: 'USDT',
+          to_currency: takeSymbolUpper,
+          amount: swapAmountInUsd
+        };
+        const swapCalcResponse = await requestOxaPay('POST', '/general/swap/calculate', calculateData, generalKey);
+        if (swapCalcResponse.result === 100 || swapCalcResponse.result === 1 || swapCalcResponse.status === 200) {
+          const calcToAmount = parseFloat(swapCalcResponse.to_amount || swapCalcResponse.data?.to_amount || '0');
+          if (calcToAmount > 0) {
+            const ratio = swapAmountCrypto / calcToAmount;
+            payAmount = payAmount * ratio;
+          }
         }
       }
 
       usdAmount = payAmount * payPrice;
       payJpyAmount = usdAmount * usdJpyRate;
+    }
+
+    if (takeJpyValue < 300) {
+      await interaction.editReply({
+        content: `⚠️ 金額が少なすぎます。\n**受け取る額が最低でも 300 円以上**になるように指定してください。`
+      });
+      return;
     }
 
     const embedInfo = interaction.message?.embeds[0];
@@ -653,32 +683,42 @@ export async function handleProceedFiatInvoiceSubmit(interaction: ButtonInteract
     const takeOption = fiatTakeOptions.find(opt => opt.value === takeSymbol);
     const takeLabel = takeOption ? takeOption.label : takeSymbol;
 
-    const embedInfo = interaction.message?.embeds[0];
-    const embedForm = new EmbedBuilder()
-      .setTitle('お支払いリンクが発行されました')
-      .setDescription(`以下のボタンから支払い画面を開き、お支払いを行ってください。\nお支払いが確認され次第、スタッフが **${takeLabel}（ポチ袋/送金リンク）** をこのチャンネル内に送信します。`)
-      .addFields(
-        { 
-          name: '📤 支払う額', 
-          value: `${payJpyAmount.toLocaleString()} 円, $${usdAmount.toFixed(2)}\n${payAmount.toFixed(6)} ${paySymbol}`, 
-          inline: true 
-        },
-        { 
-          name: '📥 受け取る額', 
-          value: `${Math.round(takeJpyValue).toLocaleString()} 円 (${takeLabel})`, 
-          inline: true 
-        }
-      )
-      .setColor('#ffaa00')
-      .setFooter({ text: `Track ID: ${trackId}` });
+      const paymentData = {
+        trackId,
+        paySymbol,
+        takeSymbol,
+        takeJpyValue: Math.round(takeJpyValue),
+        payJpyAmount: Math.round(payJpyAmount),
+        usdAmount: parseFloat(usdAmount.toFixed(2)),
+        payAmount: parseFloat(payAmount.toFixed(6))
+      };
 
-    const payButton = new ButtonBuilder()
-      .setLabel('お支払い画面を開く')
-      .setURL(payLink)
-      .setStyle(ButtonStyle.Link);
+      const embedInfo = interaction.message?.embeds[0];
+      const embedForm = new EmbedBuilder()
+        .setTitle('お支払いリンクが発行されました')
+        .setDescription(`以下のボタンから支払い画面を開き、お支払いを行ってください。\nお支払いが確認され次第、スタッフが **${takeLabel}（ポチ袋/送金リンク）** をこのチャンネル内に送信します。`)
+        .addFields(
+          { 
+            name: '📤 支払う額', 
+            value: `${payJpyAmount.toLocaleString()} 円, $${usdAmount.toFixed(2)}\n${payAmount.toFixed(6)} ${paySymbol}`, 
+            inline: true 
+          },
+          { 
+            name: '📥 受け取る額', 
+            value: `${Math.round(takeJpyValue).toLocaleString()} 円 (${takeLabel})`, 
+            inline: true 
+          }
+        )
+        .setColor('#ffaa00')
+        .setFooter({ text: `PaymentData: ${JSON.stringify(paymentData)}` });
 
-    const checkButton = new ButtonBuilder()
-      .setCustomId(`check_fiat_payment:${trackId}:${paySymbol}:${takeSymbol}:${Math.round(takeJpyValue)}:${Math.round(payJpyAmount)}:${usdAmount.toFixed(2)}:${payAmount.toFixed(6)}`)
+      const payButton = new ButtonBuilder()
+        .setLabel('お支払い画面を開く')
+        .setURL(payLink)
+        .setStyle(ButtonStyle.Link);
+
+      const checkButton = new ButtonBuilder()
+        .setCustomId(`check_fiat_payment:${trackId}`)
       .setLabel('支払い完了')
       .setStyle(ButtonStyle.Success)
       .setEmoji('✅');
@@ -820,6 +860,17 @@ export async function handleAddressModalSubmit(interaction: ModalSubmitInteracti
       throw new Error(`Failed to retrieve payLink or trackId from OxaPay response. Raw response: ${JSON.stringify(response)}`);
     }
 
+    const paymentData = {
+      trackId,
+      paySymbol,
+      takeSymbol,
+      finalTakeAmount: parseFloat(finalTakeAmount.toFixed(8)),
+      userAddress,
+      jpyAmount: Math.round(jpyAmount),
+      usdAmount: parseFloat(usdAmount.toFixed(2)),
+      payAmount: parseFloat(payAmount.toFixed(6))
+    };
+
     const embedInfo = interaction.message?.embeds[0];
     const embedForm = new EmbedBuilder()
       .setTitle('お支払いリンクが発行されました')
@@ -842,7 +893,7 @@ export async function handleAddressModalSubmit(interaction: ModalSubmitInteracti
         }
       )
       .setColor('#ffaa00')
-      .setFooter({ text: `Track ID: ${trackId}` });
+      .setFooter({ text: `PaymentData: ${JSON.stringify(paymentData)}` });
 
     const payButton = new ButtonBuilder()
       .setLabel('お支払い画面を開く')
@@ -850,7 +901,7 @@ export async function handleAddressModalSubmit(interaction: ModalSubmitInteracti
       .setStyle(ButtonStyle.Link);
 
     const checkButton = new ButtonBuilder()
-      .setCustomId(`check_payment:${trackId}:${paySymbol}:${takeSymbol}:${finalTakeAmount.toFixed(8)}:${userAddress}:${Math.round(jpyAmount)}:${usdAmount.toFixed(2)}:${payAmount.toFixed(6)}`)
+      .setCustomId(`check_payment:${trackId}`)
       .setLabel('支払い完了')
       .setStyle(ButtonStyle.Success)
       .setEmoji('✅');

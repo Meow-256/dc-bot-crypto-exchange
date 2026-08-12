@@ -115,12 +115,12 @@ export function getFilteredOptions(type: string, isGive: boolean) {
 // ラベルから大文字の通貨シンボルを取得する関数
 export function getCryptoSymbolFromLabel(label: string): string {
   const upper = label.toUpperCase();
+  if (upper.includes('TETHER') || upper.includes('USDT')) return 'USDT';
   if (upper.includes('BTC')) return 'BTC';
   if (upper.includes('LTC')) return 'LTC';
   if (upper.includes('ETH')) return 'ETH';
   if (upper.includes('SOL')) return 'SOL';
   if (upper.includes('XMR')) return 'XMR';
-  if (upper.includes('TETHER') || upper.includes('USDT')) return 'USDT';
   if (upper.includes('DAI')) return 'DAI';
   return 'USDT';
 }
@@ -139,7 +139,7 @@ export function updateUsdJpyRate(): Promise<number> {
           const parsed = JSON.parse(body);
           if (parsed && parsed.rates && typeof parsed.rates.JPY === 'number') {
             currentUsdJpyRate = parsed.rates.JPY;
-            console.log(`[Rate Monitor] Updated USD_JPY Rate: ${currentUsdJpyRate}`);
+// ログ出力を削除
             resolve(currentUsdJpyRate);
           } else {
             console.error('[Rate Monitor] Invalid response format:', body);
@@ -169,15 +169,20 @@ export function isValidCryptoAddress(address: string, symbol: string): boolean {
     const WAValidator = require('multicoin-address-validator');
     
     try {
+      // USDTなどのマルチチェーン対応トークン向けの厳格なチェックサム検証
+      if (symbol === 'USDT') {
+        if (/^0x[a-fA-F0-9]{40}$/i.test(address)) {
+           return WAValidator.validate(address, 'ETH'); 
+        }
+        if (address.startsWith('T')) {
+           return WAValidator.validate(address, 'TRX');
+        }
+        return false;
+      }
+
       const isValid = WAValidator.validate(address, symbol);
       if (isValid) return true;
       
-      // USDTなどのマルチチェーン対応トークン向けのフォールバック検証
-      if (symbol === 'USDT') {
-        if (/^T[A-Za-z1-9]{33}$/.test(address)) return true; // TRC20 (Tron)
-        if (/^0x[a-fA-F0-9]{40}$/i.test(address)) return true; // ERC20/BEP20
-        return WAValidator.validate(address, 'ETH') || WAValidator.validate(address, 'TRX');
-      }
       return false;
     } catch (validationError) {
       // WAValidator が対応していない通貨 (Unknown currency) の場合は下の正規表現へフォールバック
@@ -196,8 +201,8 @@ export function isValidCryptoAddress(address: string, symbol: string): boolean {
     case 'DAI':
       return /^0x[a-fA-F0-9]{40}$/i.test(address);
     case 'USDT':
-      if (/^T[A-Za-z1-9]{33}$/.test(address)) return true; // TRC20
       if (/^0x[a-fA-F0-9]{40}$/i.test(address)) return true; // ERC20/BEP20
+      if (/^T[1-9A-HJ-NP-Za-km-z]{33}$/.test(address)) return true; // TRC20 (ライブラリ未導入時の緩いフォールバック)
       return false;
     case 'SOL':
       return /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(address);

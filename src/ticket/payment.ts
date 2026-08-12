@@ -10,6 +10,10 @@ import {
   ChannelType,
   TextChannel,
   ThreadChannel,
+  ModalBuilder,
+  TextInputBuilder,
+  TextInputStyle,
+  ModalSubmitInteraction,
 } from 'discord.js';
 import { activePollings, fiatTakeOptions, stopPollingForChannel } from '../config';
 import { requestOxaPay } from '../oxapay';
@@ -623,16 +627,100 @@ export async function processFiatPaymentCheckCore(
   const rowClose = new ActionRowBuilder<ButtonBuilder>().addComponents(closeButton);
 
   if (channel && 'send' in channel) {
-    await channel.send({
-      embeds: [staffEmbed],
-      components: [rowClose]
-    });
+    const userEmbed = new EmbedBuilder()
+      .setTitle('✅ お支払いが確認されました')
+      .setDescription(`${userMention} 様、お支払いが確認されました。\n\nただいまスタッフが **${takeLabel}** のポチ袋/送金リンクを手配しております。\nお渡しまでもうしばらくお待ちください。`)
+      .setColor('#00ff00')
+      .setTimestamp();
 
-    const supportRoleId = process.env.SUPPORT_ROLE_ID;
-    const mentionContent = supportRoleId ? `<@&${supportRoleId}>` : '@Support';
-    await channel.send({
-      content: `${mentionContent} お客様からの暗号通貨着金が確認されました（または手動承認）。上記の金額【${Math.round(takeJpyValue).toLocaleString()}円 (${takeLabel})】のポチ袋/送金リンクを作成し、このチャンネルへ送信してください！`
-    });
+    await channel.send({ embeds: [userEmbed] });
+
+    const fiatRequestChannelId = process.env.FIAT_SEND_REQUEST_CHANNEL_ID;
+    if (fiatRequestChannelId && channel.client) {
+      try {
+        const reqChannel = await channel.client.channels.fetch(fiatRequestChannelId);
+        if (reqChannel && 'send' in reqChannel) {
+          const payText = payJpyAmount 
+            ? `${payJpyAmount.toLocaleString()} 円`
+            : `${paySymbolUpper}`;
+          const jpyVal = payJpyAmount || takeJpyValue || 0;
+          const usdVal = payUsdAmount ? parseFloat(payUsdAmount) : 0;
+
+          const requestData = {
+            userMention,
+            paySymbolUpper,
+            takeLabel,
+            payText,
+            jpyVal,
+            usdVal
+          };
+
+          const reqEmbed = new EmbedBuilder()
+            .setTitle('🚨 【要対応】Crypto To Fiat ポチ袋手配リクエスト')
+            .setDescription(`ユーザーのお支払いが完了し、ポチ袋等の手配が必要です。`)
+            .addFields(
+              { name: '📥 受け取り方法', value: `**${takeLabel}**`, inline: true },
+              { name: '💴 送るべき金額', value: `**${Math.round(takeJpyValue).toLocaleString()} 円**`, inline: true },
+              { name: '👤 ユーザー', value: `${userMention}`, inline: true },
+              { name: '🎫 対象チケット', value: `<#${channel.id}>`, inline: true },
+              { name: '⏰ 発生日時', value: `<t:${Math.floor(Date.now() / 1000)}:f>`, inline: true }
+            )
+            .setColor('#ffaa00')
+            .setTimestamp()
+            .setFooter({ text: `RequestData: ${JSON.stringify(requestData)}` });
+
+          const linkButton = new ButtonBuilder()
+            .setCustomId(`fiat_send_link:${channel.id}`)
+            .setLabel('Linkを入力')
+            .setStyle(ButtonStyle.Primary)
+            .setEmoji('🔗');
+
+          const passButton = new ButtonBuilder()
+            .setCustomId(`fiat_send_pass:${channel.id}`)
+            .setLabel('Passwordを入力')
+            .setStyle(ButtonStyle.Secondary)
+            .setEmoji('🔑');
+
+          const completeButton = new ButtonBuilder()
+            .setCustomId(`fiat_send_complete:${channel.id}`)
+            .setLabel('完了')
+            .setStyle(ButtonStyle.Success)
+            .setEmoji('✅');
+
+          const reqRow = new ActionRowBuilder<ButtonBuilder>().addComponents(linkButton, passButton, completeButton);
+
+          const supportRoleId = process.env.SUPPORT_ROLE_ID;
+          const mentionContent = supportRoleId ? `<@&${supportRoleId}>` : '@Support';
+          
+          await reqChannel.send({
+            content: `${mentionContent} 新しい送金手配リクエストが発生しました。`,
+            embeds: [reqEmbed],
+            components: [reqRow]
+          });
+        }
+      } catch (err) {
+        console.error('Failed to send fiat request to fiat channel:', err);
+      }
+    } else {
+      // 互換性のため、FIAT_SEND_REQUEST_CHANNEL_ID がない場合は従来通り元のチャンネルに通知
+      await channel.send({
+        embeds: [staffEmbed],
+        components: [rowClose]
+      });
+
+      const supportRoleId = process.env.SUPPORT_ROLE_ID;
+      const mentionContent = supportRoleId ? `<@&${supportRoleId}>` : '@Support';
+      await channel.send({
+        content: `${mentionContent} お客様からの暗号通貨着金が確認されました（または手動承認）。上記の金額【${Math.round(takeJpyValue).toLocaleString()}円 (${takeLabel})】のポチ袋/送金リンクを作成し、このチャンネルへ送信してください！`
+      });
+    }
+  }
+
+  const fiatRequestChannelId = process.env.FIAT_SEND_REQUEST_CHANNEL_ID;
+  if (fiatRequestChannelId && channel && channel.client) {
+    // 新ルート（リクエストチャンネル経由）の場合は、
+    // 完了ボタン (handleFiatSendCompleteButton) 押下時に DM/ログ送信を行うためここでは何もしない
+    return true;
   }
 
   const payText = payJpyAmount 
@@ -678,13 +766,26 @@ export async function handleCheckPayment(interaction: ButtonInteraction) {
   const customId = interaction.customId;
   const parts = customId.split(':');
   const trackId = parts[1];
-  const paySymbol = parts[2].toUpperCase();
-  const takeSymbol = parts[3].toUpperCase();
-  const finalTakeAmount = parseFloat(parts[4]);
-  const userAddress = parts[5];
-  const payJpyAmount = parts[6] ? parseFloat(parts[6]) : undefined;
-  const payUsdAmount = parts[7];
-  const payCryptoAmount = parts[8];
+
+  let paymentData: any = {};
+  if (interaction.message && interaction.message.embeds.length > 0) {
+    const embed = interaction.message.embeds[interaction.message.embeds.length - 1];
+    if (embed.footer && embed.footer.text && embed.footer.text.startsWith('PaymentData: ')) {
+      try {
+        paymentData = JSON.parse(embed.footer.text.replace('PaymentData: ', ''));
+      } catch (e) {
+        console.error('Failed to parse PaymentData from footer:', e);
+      }
+    }
+  }
+
+  const paySymbol = (paymentData.paySymbol || parts[2] || 'UNKNOWN').toUpperCase();
+  const takeSymbol = (paymentData.takeSymbol || parts[3] || 'UNKNOWN').toUpperCase();
+  const finalTakeAmount = paymentData.finalTakeAmount !== undefined ? paymentData.finalTakeAmount : parseFloat(parts[4] || '0');
+  const userAddress = paymentData.userAddress || parts[5] || 'UNKNOWN';
+  const payJpyAmount = paymentData.jpyAmount !== undefined ? paymentData.jpyAmount : (parts[6] ? parseFloat(parts[6]) : undefined);
+  const payUsdAmount = paymentData.usdAmount !== undefined ? String(paymentData.usdAmount) : parts[7];
+  const payCryptoAmount = paymentData.payAmount !== undefined ? String(paymentData.payAmount) : parts[8];
 
   await interaction.deferReply({ ephemeral: true });
 
@@ -781,12 +882,25 @@ export async function handleCheckFiatPayment(interaction: ButtonInteraction) {
   const customId = interaction.customId;
   const parts = customId.split(':');
   const trackId = parts[1];
-  const paySymbol = parts[2].toUpperCase();
-  const takeSymbol = parts[3];
-  const takeJpyValue = parseFloat(parts[4]);
-  const payJpyAmount = parts[5] ? parseFloat(parts[5]) : undefined;
-  const payUsdAmount = parts[6];
-  const payCryptoAmount = parts[7];
+
+  let paymentData: any = {};
+  if (interaction.message && interaction.message.embeds.length > 0) {
+    const embed = interaction.message.embeds[interaction.message.embeds.length - 1];
+    if (embed.footer && embed.footer.text && embed.footer.text.startsWith('PaymentData: ')) {
+      try {
+        paymentData = JSON.parse(embed.footer.text.replace('PaymentData: ', ''));
+      } catch (e) {
+        console.error('Failed to parse PaymentData from footer:', e);
+      }
+    }
+  }
+
+  const paySymbol = (paymentData.paySymbol || parts[2] || 'UNKNOWN').toUpperCase();
+  const takeSymbol = paymentData.takeSymbol || parts[3] || 'UNKNOWN';
+  const takeJpyValue = paymentData.takeJpyValue !== undefined ? paymentData.takeJpyValue : parseFloat(parts[4] || '0');
+  const payJpyAmount = paymentData.payJpyAmount !== undefined ? paymentData.payJpyAmount : (parts[5] ? parseFloat(parts[5]) : undefined);
+  const payUsdAmount = paymentData.usdAmount !== undefined ? String(paymentData.usdAmount) : parts[6];
+  const payCryptoAmount = paymentData.payAmount !== undefined ? String(paymentData.payAmount) : parts[7];
 
   await interaction.deferReply({ ephemeral: true });
 
@@ -932,13 +1046,26 @@ export async function handleMarkAsCompletedCommand(message: Message) {
     if (customId.startsWith('check_payment:')) {
       const parts = customId.split(':');
       const trackId = parts[1];
-      const paySymbol = parts[2].toUpperCase();
-      const takeSymbol = parts[3].toUpperCase();
-      const finalTakeAmount = parseFloat(parts[4]);
-      const userAddress = parts[5];
-      const payJpyAmount = parts[6] ? parseFloat(parts[6]) : undefined;
-      const payUsdAmount = parts[7];
-      const payCryptoAmount = parts[8];
+
+      let paymentData: any = {};
+      if (targetMsg.embeds.length > 0) {
+        const embed = targetMsg.embeds[targetMsg.embeds.length - 1];
+        if (embed.footer && embed.footer.text && embed.footer.text.startsWith('PaymentData: ')) {
+          try {
+            paymentData = JSON.parse(embed.footer.text.replace('PaymentData: ', ''));
+          } catch (e) {
+            console.error('Failed to parse PaymentData from footer:', e);
+          }
+        }
+      }
+
+      const paySymbol = (paymentData.paySymbol || parts[2] || 'UNKNOWN').toUpperCase();
+      const takeSymbol = (paymentData.takeSymbol || parts[3] || 'UNKNOWN').toUpperCase();
+      const finalTakeAmount = paymentData.finalTakeAmount !== undefined ? paymentData.finalTakeAmount : parseFloat(parts[4] || '0');
+      const userAddress = paymentData.userAddress || parts[5] || 'UNKNOWN';
+      const payJpyAmount = paymentData.jpyAmount !== undefined ? paymentData.jpyAmount : (parts[6] ? parseFloat(parts[6]) : undefined);
+      const payUsdAmount = paymentData.usdAmount !== undefined ? String(paymentData.usdAmount) : parts[7];
+      const payCryptoAmount = paymentData.payAmount !== undefined ? String(paymentData.payAmount) : parts[8];
 
       await message.reply('🔧 手動コマンドにより支払い完了として処理を実行します...');
 
@@ -964,12 +1091,25 @@ export async function handleMarkAsCompletedCommand(message: Message) {
     } else if (customId.startsWith('check_fiat_payment:')) {
       const parts = customId.split(':');
       const trackId = parts[1];
-      const paySymbol = parts[2].toUpperCase();
-      const takeSymbol = parts[3];
-      const takeJpyValue = parseFloat(parts[4]);
-      const payJpyAmount = parts[5] ? parseFloat(parts[5]) : undefined;
-      const payUsdAmount = parts[6];
-      const payCryptoAmount = parts[7];
+
+      let paymentData: any = {};
+      if (targetMsg.embeds.length > 0) {
+        const embed = targetMsg.embeds[targetMsg.embeds.length - 1];
+        if (embed.footer && embed.footer.text && embed.footer.text.startsWith('PaymentData: ')) {
+          try {
+            paymentData = JSON.parse(embed.footer.text.replace('PaymentData: ', ''));
+          } catch (e) {
+            console.error('Failed to parse PaymentData from footer:', e);
+          }
+        }
+      }
+
+      const paySymbol = (paymentData.paySymbol || parts[2] || 'UNKNOWN').toUpperCase();
+      const takeSymbol = paymentData.takeSymbol || parts[3] || 'UNKNOWN';
+      const takeJpyValue = paymentData.takeJpyValue !== undefined ? paymentData.takeJpyValue : parseFloat(parts[4] || '0');
+      const payJpyAmount = paymentData.payJpyAmount !== undefined ? paymentData.payJpyAmount : (parts[5] ? parseFloat(parts[5]) : undefined);
+      const payUsdAmount = paymentData.usdAmount !== undefined ? String(paymentData.usdAmount) : parts[6];
+      const payCryptoAmount = paymentData.payAmount !== undefined ? String(paymentData.payAmount) : parts[7];
 
       await message.reply('🔧 手動コマンドにより支払い完了として処理を実行します...');
 
@@ -998,5 +1138,242 @@ export async function handleMarkAsCompletedCommand(message: Message) {
     const supportRoleId = process.env.SUPPORT_ROLE_ID;
     const mentionContent = supportRoleId ? `<@&${supportRoleId}>` : '@Support';
     await message.reply(`Error ${mentionContent}`);
+  }
+}
+
+/**
+ * Fiat Request Channel の「Linkを入力」ボタンのハンドラ
+ */
+export async function handleFiatSendLinkButton(interaction: ButtonInteraction) {
+  const parts = interaction.customId.split(':');
+  const ticketChannelId = parts[1];
+
+  const modal = new ModalBuilder()
+    .setCustomId(`submit_fiat_link:${ticketChannelId}`)
+    .setTitle('ポチ袋 / 送金リンクの入力');
+
+  const urlInput = new TextInputBuilder()
+    .setCustomId('fiat_link_url')
+    .setLabel('送金リンク (URL)')
+    .setStyle(TextInputStyle.Short)
+    .setRequired(true)
+    .setPlaceholder('https://paypay.me/...');
+
+  const row = new ActionRowBuilder<TextInputBuilder>().addComponents(urlInput);
+  modal.addComponents(row);
+
+  await interaction.showModal(modal);
+}
+
+/**
+ * Fiat Request Channel の「Passwordを入力」ボタンのハンドラ
+ */
+export async function handleFiatSendPassButton(interaction: ButtonInteraction) {
+  const parts = interaction.customId.split(':');
+  const ticketChannelId = parts[1];
+
+  const modal = new ModalBuilder()
+    .setCustomId(`submit_fiat_pass:${ticketChannelId}`)
+    .setTitle('ポチ袋パスワードの入力');
+
+  const passInput = new TextInputBuilder()
+    .setCustomId('fiat_pass_code')
+    .setLabel('パスワード')
+    .setStyle(TextInputStyle.Short)
+    .setRequired(true)
+    .setPlaceholder('1234');
+
+  const row = new ActionRowBuilder<TextInputBuilder>().addComponents(passInput);
+  modal.addComponents(row);
+
+  await interaction.showModal(modal);
+}
+
+/**
+ * Fiat Request Channel の Modal Submit (Link / Pass共通) ハンドラ
+ */
+export async function handleFiatSendModalSubmit(interaction: ModalSubmitInteraction) {
+  const parts = interaction.customId.split(':');
+  const type = parts[0]; // submit_fiat_link or submit_fiat_pass
+  const ticketChannelId = parts[1];
+
+  await interaction.deferReply({ ephemeral: true });
+
+  try {
+    const message = interaction.message;
+    if (!message || message.embeds.length === 0) {
+      await interaction.editReply({ content: '元のリクエストメッセージが見つかりません。' });
+      return;
+    }
+
+    const originalEmbed = EmbedBuilder.from(message.embeds[0]);
+    let requestData: any = {};
+    if (originalEmbed.data.footer && originalEmbed.data.footer.text && originalEmbed.data.footer.text.startsWith('RequestData: ')) {
+      try {
+        requestData = JSON.parse(originalEmbed.data.footer.text.replace('RequestData: ', ''));
+      } catch (e) {
+        console.error('Failed to parse RequestData from footer:', e);
+      }
+    }
+
+    if (type === 'submit_fiat_link') {
+      const url = interaction.fields.getTextInputValue('fiat_link_url');
+      requestData.fiat_link = url;
+    } else {
+      const pass = interaction.fields.getTextInputValue('fiat_pass_code');
+      requestData.fiat_pass = pass;
+    }
+
+    originalEmbed.setFooter({ text: `RequestData: ${JSON.stringify(requestData)}` });
+
+    // 進行状況の表示を更新
+    let statusText = 'ユーザーのお支払いが完了し、ポチ袋等の手配が必要です。\n\n**【入力状況】**\n';
+    statusText += `🔗 送金リンク: ${requestData.fiat_link ? '✅ 入力済み' : '未入力'}\n`;
+    statusText += `🔑 パスワード: ${requestData.fiat_pass ? '✅ 入力済み' : '未入力'}`;
+    originalEmbed.setDescription(statusText);
+
+    await message.edit({ embeds: [originalEmbed] });
+    await interaction.editReply({ content: '情報を保存しました。すべての入力が終わったら「完了」ボタンを押してユーザーに送信してください。' });
+
+  } catch (error) {
+    console.error('Error in handleFiatSendModalSubmit:', error);
+    await interaction.editReply({ content: 'エラーが発生しました。' });
+  }
+}
+
+/**
+ * Fiat Request Channel の「完了」ボタンのハンドラ
+ */
+export async function handleFiatSendCompleteButton(interaction: ButtonInteraction) {
+  const parts = interaction.customId.split(':');
+  const ticketChannelId = parts[1];
+
+  await interaction.deferReply({ ephemeral: true });
+
+  try {
+    const message = interaction.message;
+    if (message && message.embeds.length > 0) {
+      const originalEmbed = EmbedBuilder.from(message.embeds[0]);
+
+      let requestData: any = {};
+      if (originalEmbed.data.footer && originalEmbed.data.footer.text && originalEmbed.data.footer.text.startsWith('RequestData: ')) {
+        try {
+          requestData = JSON.parse(originalEmbed.data.footer.text.replace('RequestData: ', ''));
+        } catch (e) {
+          console.error('Failed to parse RequestData from footer:', e);
+        }
+      }
+
+      originalEmbed.setColor('#808080');
+      originalEmbed.setTitle('✅ 【完了済】Crypto To Fiat ポチ袋手配リクエスト');
+      originalEmbed.setFooter(null); // フッターを消去しておく（任意）
+      
+      const ticketChannel = await interaction.client.channels.fetch(ticketChannelId);
+      if (ticketChannel && 'send' in ticketChannel) {
+        let sendDesc = '';
+        if (requestData.fiat_link) sendDesc += `**送金リンク:**\n${requestData.fiat_link}\n\n`;
+        if (requestData.fiat_pass) sendDesc += `**パスワード:**\n\`\`\`${requestData.fiat_pass}\`\`\`\n\n`;
+        
+        if (sendDesc) {
+          const sendEmbed = new EmbedBuilder()
+            .setTitle('🎁 お受け取り情報')
+            .setDescription(`スタッフより以下の情報が届きました。\n内容をご確認ください。\n\n${sendDesc.trim()}`)
+            .setColor('#00ff00')
+            .setTimestamp()
+            .setFooter({ text: `RequestData: ${JSON.stringify(requestData)}` });
+
+          const receiveCompleteBtn = new ButtonBuilder()
+            .setCustomId('fiat_receive_complete')
+            .setLabel('受け取り完了 (チケットを閉じる)')
+            .setStyle(ButtonStyle.Success)
+            .setEmoji('✅');
+          
+          const rowAction = new ActionRowBuilder<ButtonBuilder>().addComponents(receiveCompleteBtn);
+
+          // Embed内だけでは通知が飛ばないため、content に userMention を入れてプッシュ通知を発生させる
+          await ticketChannel.send({ 
+            content: `${requestData.userMention || ''} 様、お待たせいたしました！ポチ袋等の送付処理が完了しました。`,
+            embeds: [sendEmbed],
+            components: [rowAction]
+          });
+        }
+      }
+
+      await message.edit({
+        embeds: [originalEmbed],
+        components: [] // ボタンを消去
+      });
+
+      await interaction.editReply({ content: 'リクエストを完了済みに更新し、ユーザーへDMを送信しました。' });
+    }
+  } catch (error) {
+    console.error('Error in handleFiatSendCompleteButton:', error);
+    await interaction.editReply({ content: '完了処理中にエラーが発生しました。' });
+  }
+}
+
+/**
+ * ユーザーが「受け取り完了」ボタンを押したときの処理
+ */
+export async function handleFiatReceiveCompleteButton(interaction: ButtonInteraction) {
+  try {
+    const message = interaction.message;
+    if (message && message.embeds.length > 0) {
+      const embed = EmbedBuilder.from(message.embeds[0]);
+      let requestData: any = {};
+      if (embed.data.footer && embed.data.footer.text && embed.data.footer.text.startsWith('RequestData: ')) {
+        try {
+          requestData = JSON.parse(embed.data.footer.text.replace('RequestData: ', ''));
+        } catch (e) {
+          console.error('Failed to parse RequestData on receive complete:', e);
+        }
+      }
+
+      const { userMention, paySymbolUpper, takeLabel, payText, jpyVal, usdVal } = requestData;
+      
+      if (userMention) {
+        const userIdMatch = userMention.match(/\d+/);
+        const userId = userIdMatch ? userIdMatch[0] : '';
+        const ticketChannel = interaction.channel;
+
+        if (userId && ticketChannel) {
+          // 「お取引ありがとうございました」DM送信
+          await triggerPrivacyPreferenceFlow({
+            userId,
+            guildId: 'guild' in ticketChannel && ticketChannel.guild ? ticketChannel.guild.id : '',
+            userMention,
+            exchangeTypeLabel: 'Crypto To Fiat (暗号通貨 ➔ 日本円)',
+            pairLabel: `${paySymbolUpper || '不明'} ➔ ${takeLabel || '不明'}`,
+            payAmountText: payText || '不明',
+            jpyAmount: jpyVal || 0,
+            usdAmount: usdVal || 0,
+            channel: ticketChannel as any,
+            client: interaction.client
+          }).catch(console.error);
+        } else if (ticketChannel) {
+          await sendTransactionLogEmbed(ticketChannel, {
+            userMention,
+            exchangeTypeLabel: 'Crypto To Fiat (暗号通貨 ➔ 日本円)',
+            pairLabel: `${paySymbolUpper || '不明'} ➔ ${takeLabel || '不明'}`,
+            payAmountText: payText || '不明'
+          }).catch(console.error);
+        }
+      }
+
+      embed.setFooter(null);
+      await message.edit({
+        embeds: [embed],
+        components: [] 
+      }).catch(() => {});
+    }
+
+    const { closeTicketChannel } = require('./channel');
+    await closeTicketChannel(interaction);
+
+  } catch (error) {
+    console.error('Error in handleFiatReceiveCompleteButton:', error);
+    if (!interaction.replied && !interaction.deferred) {
+      await interaction.reply({ content: '処理中にエラーが発生しました。', ephemeral: true });
+    }
   }
 }
