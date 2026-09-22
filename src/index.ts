@@ -1,3 +1,6 @@
+import dns from 'dns';
+dns.setDefaultResultOrder('ipv4first');
+
 import { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder } from 'discord.js';
 import dotenv from 'dotenv';
 import {
@@ -110,11 +113,11 @@ client.once('clientReady', async () => {
       }
     }, 720000); // 12分に1回 (12 * 60 * 1000)
 
-    // 20分に1回チケットのレート・見積もり・請求書の再計算・更新を実行
-    setInterval(async () => {
+    // 毎時 0分, 20分, 40分 (20分ごと) にチケットのレート・見積もり・請求書の再計算・更新を実行
+    const runScheduledTicketRefresh = async () => {
       try {
         await updateUsdJpyRate();
-        console.log('[Scheduled Refresh] Running 20-minute ticket rate refresh...');
+        console.log('[Scheduled Refresh] Running 20-minute ticket rate refresh (0, 20, 40 min)...');
         const categoryId = process.env.TICKET_CATEGORY_ID;
 
         for (const guild of client.guilds.cache.values()) {
@@ -144,7 +147,36 @@ client.once('clientReady', async () => {
       } catch (err) {
         console.error('Error in scheduled 20-minute ticket refresh:', err);
       }
-    }, 20 * 60 * 1000); // 20分に1回 (20 * 60 * 1000 ms)
+    };
+
+    const scheduleNext20MinuteRefresh = () => {
+      const now = new Date();
+      const next = new Date(now.getTime());
+      next.setSeconds(0, 0);
+
+      const min = now.getMinutes();
+      if (min < 20) {
+        next.setMinutes(20);
+      } else if (min < 40) {
+        next.setMinutes(40);
+      } else {
+        next.setMinutes(0);
+        next.setHours(next.getHours() + 1);
+      }
+
+      const delay = Math.max(next.getTime() - now.getTime(), 1000);
+      console.log(`[Scheduler] Next ticket refresh scheduled for ${next.toLocaleTimeString()} (in ${Math.round(delay / 1000)}s)`);
+
+      setTimeout(async () => {
+        try {
+          await runScheduledTicketRefresh();
+        } finally {
+          scheduleNext20MinuteRefresh();
+        }
+      }, delay);
+    };
+
+    scheduleNext20MinuteRefresh();
   } catch (err) {
     console.error('Failed to initialize USD_JPY rate:', err);
   }

@@ -40,6 +40,34 @@ export function getSystemFeeLabel(type: 'crypto_to_crypto' | 'fiat_to_crypto' | 
   return `${(rate * 100).toFixed(1).replace(/\.0$/, '')}%`;
 }
 
+/**
+ * 為替スプレッド率を取得 (デフォルト 2.0%)
+ */
+export function getFxSpreadRate(): number {
+  const envVal = process.env.FX_SPREAD_RATE;
+  if (envVal !== undefined && envVal.trim() !== '') {
+    const parsed = parseFloat(envVal.trim());
+    if (!isNaN(parsed) && parsed >= 0) {
+      return parsed >= 1 ? parsed / 100 : parsed;
+    }
+  }
+  return 0.02;
+}
+
+/**
+ * 暗号通貨価格スプレッド率を取得 (デフォルト 1.0%)
+ */
+export function getCryptoSpreadRate(): number {
+  const envVal = process.env.CRYPTO_SPREAD_RATE;
+  if (envVal !== undefined && envVal.trim() !== '') {
+    const parsed = parseFloat(envVal.trim());
+    if (!isNaN(parsed) && parsed >= 0) {
+      return parsed >= 1 ? parsed / 100 : parsed;
+    }
+  }
+  return 0.01;
+}
+
 // アクティブな自動監視（ポーリング）タイマーの構造と管理
 export interface PollingInfo {
   timer: NodeJS.Timeout;

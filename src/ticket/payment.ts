@@ -1090,10 +1090,43 @@ export async function handleMarkAsCompletedCommand(message: Message) {
   if (!('messages' in channel)) return;
 
   try {
-    const fetchedMessages = await channel.messages.fetch({ limit: 50 });
+    // 直近メッセージから最大500件まで遡って探索
+    const allFetchedMessages: any[] = [];
+    let lastId: string | undefined = undefined;
+    for (let i = 0; i < 5; i++) {
+      const options: any = { limit: 100 };
+      if (lastId) options.before = lastId;
+      const msgs: any = await channel.messages.fetch(options);
+      if (!msgs || msgs.size === 0) break;
+      allFetchedMessages.push(...Array.from(msgs.values()));
+      lastId = msgs.last()?.id;
 
-    const alreadyCompleted = Array.from(fetchedMessages.values()).some(m =>
-      m.embeds.some(e => e.title === '🎉 お取引が完了しました')
+      const hasCompleted = allFetchedMessages.some(m =>
+        m.embeds?.some((e: any) => e.title === '🎉 お取引が完了しました')
+      );
+      const hasPayment = allFetchedMessages.some(m =>
+        m.embeds?.some((e: any) => e.footer?.text?.startsWith('PaymentData: '))
+      );
+      const hasTargetButton = allFetchedMessages.some(m =>
+        m.components?.some((r: any) =>
+          r.components?.some((c: any) =>
+            c.customId &&
+            (c.customId.startsWith('check_payment:') ||
+             c.customId.startsWith('check_fiat_payment:') ||
+             c.customId === 'fiat_receive_input_link' ||
+             c.customId === 'fiat_receive_staff_confirm')
+          )
+        )
+      );
+
+      if (hasCompleted || (hasPayment && hasTargetButton)) {
+        break;
+      }
+      if (msgs.size < 100) break;
+    }
+
+    const alreadyCompleted = allFetchedMessages.some(m =>
+      m.embeds.some((e: any) => e.title === '🎉 お取引が完了しました')
     );
     if (alreadyCompleted) {
       await message.reply('⚠️ このチケットのお取引は既に完了しています。');
@@ -1104,7 +1137,7 @@ export async function handleMarkAsCompletedCommand(message: Message) {
     let targetMsg: any = null;
     let paymentData: any = null;
 
-    for (const msg of fetchedMessages.values()) {
+    for (const msg of allFetchedMessages) {
       if (msg.components && msg.components.length > 0) {
         for (const row of msg.components as any[]) {
           if (row.components && Array.isArray(row.components)) {

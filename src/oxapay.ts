@@ -12,6 +12,7 @@ export function requestOxaPay(method: 'GET' | 'POST', path: string, data: any, a
       method: method,
       hostname: parsedUrl.hostname,
       path: parsedUrl.pathname + parsedUrl.search,
+      family: 4, // OxaPay の IP ホワイトリスト (IPv4) に一致させるため IPv4 を強制
       headers: {
         'Content-Type': 'application/json',
         'Accept': 'application/json',
@@ -19,6 +20,7 @@ export function requestOxaPay(method: 'GET' | 'POST', path: string, data: any, a
         'merchant_api_key': apiKey,
         'payout_api_key': apiKey,
         'general_api_key': apiKey,
+        'key': apiKey
       }
     };
 
@@ -47,8 +49,12 @@ export function requestOxaPay(method: 'GET' | 'POST', path: string, data: any, a
       reject(err);
     });
 
-    if (method === 'POST' && data) {
-      req.write(JSON.stringify(data));
+    if (method === 'POST') {
+      const payload = typeof data === 'object' && data !== null ? { ...data } : {};
+      if (!payload.key && apiKey) {
+        payload.key = apiKey;
+      }
+      req.write(JSON.stringify(payload));
     }
     req.end();
   });

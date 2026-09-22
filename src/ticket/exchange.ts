@@ -15,6 +15,8 @@ import {
 import {
   currentUsdJpyRate,
   getSystemFeeRate,
+  getFxSpreadRate,
+  getCryptoSpreadRate,
   fiatTakeOptions,
   fiatGiveOptions,
   exchangeOptions,
@@ -46,6 +48,26 @@ export interface ExchangeQuoteResult {
 }
 
 /**
+ * 次のレート更新時刻（毎時00分, 20分, 40分のいずれか）のUNIXタイムスタンプ（秒）を取得
+ */
+export function getNextUpdateTimestamp(): number {
+  const now = new Date();
+  const next = new Date(now.getTime());
+  next.setSeconds(0, 0);
+
+  const min = now.getMinutes();
+  if (min < 20) {
+    next.setMinutes(20);
+  } else if (min < 40) {
+    next.setMinutes(40);
+  } else {
+    next.setMinutes(0);
+    next.setHours(next.getHours() + 1);
+  }
+  return Math.floor(next.getTime() / 1000);
+}
+
+/**
  * 取引内容・レート・手数料の計算を行う共通関数
  */
 export async function calculateExchangeQuote(
@@ -67,6 +89,9 @@ export async function calculateExchangeQuote(
   if (takeSymbol.toUpperCase() === 'TETHER') takeSymbol = 'USDT';
 
   const usdJpyRate = currentUsdJpyRate;
+  const fxSpread = getFxSpreadRate(); // 2%
+  const cryptoSpread = getCryptoSpreadRate(); // 1%
+
   const isTakeFiat = takeSymbol.toLowerCase() === 'paypay' || takeSymbol.toLowerCase() === 'rakuten_pay';
   const isPayFiat = fiatGiveOptions.some(opt => opt.value === paySymbol.toLowerCase() || opt.value === paySymbolRaw.toLowerCase());
 
@@ -83,6 +108,8 @@ export async function calculateExchangeQuote(
       throw new Error(`Price not found for ${paySymbol}`);
     }
 
+    // 支払暗号通貨の評価にスプレッド適用 (-1%)
+    const effectivePayPrice = payPrice * (1.0 - cryptoSpread);
     const fiatFeeRate = getSystemFeeRate('crypto_to_fiat');
     const minSystemFeeUsd = 1.0;
 
@@ -94,14 +121,15 @@ export async function calculateExchangeQuote(
     if (mode === 'pay') {
       payJpyAmount = jpyAmount;
       usdAmount = payJpyAmount / usdJpyRate;
-      payAmount = usdAmount / payPrice;
+      payAmount = usdAmount / effectivePayPrice;
 
       const systemFeeUsd = Math.max(usdAmount * fiatFeeRate, minSystemFeeUsd);
       const afterSystemFeeUsd = usdAmount - systemFeeUsd;
-      takeJpyValue = afterSystemFeeUsd * usdJpyRate;
+      // 日本円換算時に為替スプレッド適用 (-2%)
+      takeJpyValue = afterSystemFeeUsd * (usdJpyRate * (1.0 - fxSpread));
     } else {
       takeJpyValue = jpyAmount;
-      const takeUsdValue = takeJpyValue / usdJpyRate;
+      const takeUsdValue = takeJpyValue / (usdJpyRate * (1.0 - fxSpread));
 
       let calculatedUsdAmount = takeUsdValue / (1.0 - fiatFeeRate);
       if (calculatedUsdAmount * fiatFeeRate < minSystemFeeUsd) {
@@ -110,7 +138,7 @@ export async function calculateExchangeQuote(
 
       usdAmount = calculatedUsdAmount;
       payJpyAmount = usdAmount * usdJpyRate;
-      payAmount = usdAmount / payPrice;
+      payAmount = usdAmount / effectivePayPrice;
     }
 
     if (takeJpyValue < 300) {
@@ -171,6 +199,11 @@ export async function calculateExchangeQuote(
     const fiatFeeRate = getSystemFeeRate('fiat_to_crypto');
     const minSystemFeeUsd = 1.0;
 
+    // 為替スプレッド適用 (+2%)
+    const effectiveUsdJpyRate = usdJpyRate * (1.0 + fxSpread);
+    // 暗号通貨価格スプレッド適用 (+1%)
+    const effectiveTakePrice = takePrice * (1.0 + cryptoSpread);
+
     let usdAmount = 0;
     let payJpyAmount = 0;
     let finalTakeAmount = 0;
@@ -178,19 +211,20 @@ export async function calculateExchangeQuote(
 
     if (mode === 'pay') {
       payJpyAmount = jpyAmount;
-      usdAmount = payJpyAmount / usdJpyRate;
+      usdAmount = payJpyAmount / effectiveUsdJpyRate;
 
       const systemFeeUsd = Math.max(usdAmount * fiatFeeRate, minSystemFeeUsd);
       const afterSystemFeeUsd = usdAmount - systemFeeUsd;
-      const afterSystemFeeCrypto = afterSystemFeeUsd / takePrice;
+      const afterSystemFeeCrypto = afterSystemFeeUsd / effectiveTakePrice;
       finalTakeAmount = afterSystemFeeCrypto - withdrawFee;
 
       if (finalTakeAmount <= 0) {
         const withdrawFeeInUsd = withdrawFee * takePrice;
         const minRequiredUsd = 1.0 + withdrawFeeInUsd;
-        const minRequiredJpy = minRequiredUsd * usdJpyRate;
+        const minRequiredJpy = minRequiredUsd * effectiveUsdJpyRate;
         throw new Error(`入力金額が少なすぎます。システム手数料および送金手数料（${withdrawFee} ${takeSymbolUpper} = 約$${withdrawFeeInUsd.toFixed(2)}）を支払える金額（約 ${Math.ceil(minRequiredJpy).toLocaleString()} 円以上）を指定してください。`);
       }
+      // 表示用USD/JPY価値は標準価格で換算して自然に見せる
       takeUsdValue = finalTakeAmount * takePrice;
     } else {
       const takeJpyValue = jpyAmount;
@@ -198,7 +232,7 @@ export async function calculateExchangeQuote(
       finalTakeAmount = takeUsdValue / takePrice;
 
       const afterSystemFeeCrypto = finalTakeAmount + withdrawFee;
-      const afterSystemFeeUsd = afterSystemFeeCrypto * takePrice;
+      const afterSystemFeeUsd = afterSystemFeeCrypto * effectiveTakePrice;
 
       let payUsdAmount = afterSystemFeeUsd / (1.0 - fiatFeeRate);
       if (payUsdAmount * fiatFeeRate < minSystemFeeUsd) {
@@ -206,7 +240,7 @@ export async function calculateExchangeQuote(
       }
 
       usdAmount = payUsdAmount;
-      payJpyAmount = usdAmount * usdJpyRate;
+      payJpyAmount = usdAmount * effectiveUsdJpyRate;
     }
 
     const takeJpyValue = takeUsdValue * usdJpyRate;
@@ -269,6 +303,10 @@ export async function calculateExchangeQuote(
   const systemFeeRate = getSystemFeeRate('crypto_to_crypto');
   const minSystemFeeUsd = 1.0;
 
+  // 暗号通貨スプレッド
+  const effectivePayPrice = payPrice * (1.0 - cryptoSpread);
+  const effectiveTakePrice = takePrice * (1.0 + cryptoSpread);
+
   let usdAmount = 0;
   let payJpyAmount = 0;
   let payAmount = 0;
@@ -279,9 +317,9 @@ export async function calculateExchangeQuote(
   if (mode === 'pay') {
     payJpyAmount = jpyAmount;
     usdAmount = payJpyAmount / usdJpyRate;
-    payAmount = usdAmount / payPrice;
+    payAmount = usdAmount / effectivePayPrice;
 
-    let swapAmount = usdAmount / takePrice;
+    let swapAmount = usdAmount / effectiveTakePrice;
     if (takeSymbolUpper !== 'USDT') {
       const calculateData = {
         from_currency: 'USDT',
@@ -292,17 +330,17 @@ export async function calculateExchangeQuote(
       if (swapCalcResponse.result === 100 || swapCalcResponse.result === 1 || swapCalcResponse.status === 200) {
         const calcToAmount = swapCalcResponse.to_amount || swapCalcResponse.data?.to_amount;
         if (calcToAmount) {
-          swapAmount = parseFloat(calcToAmount);
+          swapAmount = parseFloat(calcToAmount) / (1.0 + cryptoSpread);
         }
       }
     } else {
-      swapAmount = usdAmount; // USDT を受け取る場合はスワップ不要 (1 USD = 1 USDT)
+      swapAmount = usdAmount / (1.0 + cryptoSpread);
     }
 
     const swapAmountInUsd = swapAmount * takePrice;
     const systemFeeUsd = Math.max(swapAmountInUsd * systemFeeRate, minSystemFeeUsd);
     const afterSystemFeeUsd = swapAmountInUsd - systemFeeUsd;
-    const afterSystemFee = afterSystemFeeUsd / takePrice;
+    const afterSystemFee = afterSystemFeeUsd / effectiveTakePrice;
     finalTakeAmount = afterSystemFee - withdrawFee;
 
     if (finalTakeAmount <= 0) {
@@ -321,15 +359,15 @@ export async function calculateExchangeQuote(
     finalTakeAmount = takeUsdValue / takePrice;
 
     const afterSystemFeeCrypto = finalTakeAmount + withdrawFee;
-    const afterSystemFeeUsd = afterSystemFeeCrypto * takePrice;
+    const afterSystemFeeUsd = afterSystemFeeCrypto * effectiveTakePrice;
 
     let swapAmountInUsd = afterSystemFeeUsd / (1.0 - systemFeeRate);
     if (swapAmountInUsd * systemFeeRate < minSystemFeeUsd) {
       swapAmountInUsd = afterSystemFeeUsd + minSystemFeeUsd;
     }
 
-    const swapAmountCrypto = swapAmountInUsd / takePrice;
-    payAmount = swapAmountInUsd / payPrice;
+    const swapAmountCrypto = swapAmountInUsd / effectiveTakePrice;
+    payAmount = swapAmountInUsd / effectivePayPrice;
 
     if (takeSymbolUpper !== 'USDT') {
       const calculateData = {
@@ -720,7 +758,8 @@ export async function handleAmountModalSubmit(interaction: ModalSubmitInteractio
         .setTitle('📈 適用レート情報')
         .addFields(
           { name: '🇺🇸 USD/JPY', value: `${quote.usdJpyRate.toFixed(2)} 円 / 1$`, inline: true },
-          { name: `${getEmojiPrefix(quote.paySymbol) || '🪙 '}${quote.paySymbol}/USD`, value: `${Math.round(quote.payPrice * quote.usdJpyRate).toLocaleString()} 円 ($${quote.payPrice.toFixed(2)}) / 1 ${quote.paySymbol}`, inline: true }
+          { name: `${getEmojiPrefix(quote.paySymbol) || '🪙 '}${quote.paySymbol}/USD`, value: `${Math.round(quote.payPrice * quote.usdJpyRate).toLocaleString()} 円 ($${quote.payPrice.toFixed(2)}) / 1 ${quote.paySymbol}`, inline: true },
+          { name: '⏱️ 次回レート更新', value: `<t:${getNextUpdateTimestamp()}:R>`, inline: true }
         )
         .setColor('#0099ff');
 
@@ -779,7 +818,8 @@ export async function handleAmountModalSubmit(interaction: ModalSubmitInteractio
         .setTitle('📈 適用レート情報')
         .addFields(
           { name: '🇺🇸 USD/JPY', value: `${quote.usdJpyRate.toFixed(2)} 円 / 1$`, inline: true },
-          { name: `${getEmojiPrefix(quote.takeSymbol) || '🪙 '}${quote.takeSymbol}/USD`, value: `${Math.round(quote.takePrice * quote.usdJpyRate).toLocaleString()} 円 ($${quote.takePrice.toFixed(2)}) / 1 ${quote.takeSymbol}`, inline: true }
+          { name: `${getEmojiPrefix(quote.takeSymbol) || '🪙 '}${quote.takeSymbol}/USD`, value: `${Math.round(quote.takePrice * quote.usdJpyRate).toLocaleString()} 円 ($${quote.takePrice.toFixed(2)}) / 1 ${quote.takeSymbol}`, inline: true },
+          { name: '⏱️ 次回レート更新', value: `<t:${getNextUpdateTimestamp()}:R>`, inline: true }
         )
         .setColor('#0099ff');
 
@@ -836,7 +876,8 @@ export async function handleAmountModalSubmit(interaction: ModalSubmitInteractio
       .addFields(
         { name: '🇺🇸 USD/JPY', value: `${quote.usdJpyRate.toFixed(2)} 円 / 1$`, inline: true },
         { name: `${getEmojiPrefix(quote.paySymbol) || '🪙 '}${quote.paySymbol}/USD`, value: `${Math.round(quote.payPrice * quote.usdJpyRate).toLocaleString()} 円 ($${quote.payPrice.toFixed(2)}) / 1 ${quote.paySymbol}`, inline: true },
-        { name: `${getEmojiPrefix(quote.takeSymbol) || '🪙 '}${quote.takeSymbol}/USD`, value: `${Math.round(quote.takePrice * quote.usdJpyRate).toLocaleString()} 円 ($${quote.takePrice.toFixed(2)}) / 1 ${quote.takeSymbol}`, inline: true }
+        { name: `${getEmojiPrefix(quote.takeSymbol) || '🪙 '}${quote.takeSymbol}/USD`, value: `${Math.round(quote.takePrice * quote.usdJpyRate).toLocaleString()} 円 ($${quote.takePrice.toFixed(2)}) / 1 ${quote.takeSymbol}`, inline: true },
+        { name: '⏱️ 次回レート更新', value: `<t:${getNextUpdateTimestamp()}:R>`, inline: true }
       )
       .setColor('#0099ff');
 
@@ -925,15 +966,20 @@ export async function handleProceedFiatInvoiceSubmit(interaction: ButtonInteract
         .setTitle('お支払いリンクが発行されました')
         .setDescription(`以下のボタンから支払い画面を開き、お支払いを行ってください。\nお支払いが確認され次第、スタッフが **${takeLabel}（ポチ袋/送金リンク）** をこのチャンネル内に送信します。`)
         .addFields(
-          { 
-            name: '📤 支払う額', 
-            value: `${payJpyAmount.toLocaleString()} 円, $${usdAmount.toFixed(2)}\n${payAmount.toFixed(6)} ${paySymbol}`, 
-            inline: true 
+          {
+            name: '📤 支払う額',
+            value: `${payJpyAmount.toLocaleString()} 円, $${usdAmount.toFixed(2)}\n${payAmount.toFixed(6)} ${paySymbol}`,
+            inline: true
           },
-          { 
-            name: '📥 受け取る額', 
-            value: `${Math.round(takeJpyValue).toLocaleString()} 円 (${takeLabel})`, 
-            inline: true 
+          {
+            name: '📥 受け取る額',
+            value: `${Math.round(takeJpyValue).toLocaleString()} 円 (${takeLabel})`,
+            inline: true
+          },
+          {
+            name: '⏱️ 次回レート更新',
+            value: `<t:${getNextUpdateTimestamp()}:R>`,
+            inline: true
           }
         )
         .setColor('#ffaa00')
@@ -1072,20 +1118,25 @@ export async function handleAddressModalSubmit(interaction: ModalSubmitInteracti
         .setTitle('送金手続きへ進みます')
         .setDescription(isLinkNeeded ? `以下のボタンから、${payLabel}の「ポチ袋 / 送金リンク」と「パスワード」を入力してください。` : `スタッフが指定する口座・支払い先等への案内をお待ちください。\n\n支払いが完了しましたら、スタッフが入金確認後、指定のアドレスへ自動送金が行われます。`)
         .addFields(
-          { 
-            name: '📤 支払う額', 
-            value: `${Math.round(jpyAmount).toLocaleString()} 円 (${payLabel})`, 
-            inline: true 
+          {
+            name: '📤 支払う額',
+            value: `${Math.round(jpyAmount).toLocaleString()} 円 (${payLabel})`,
+            inline: true
           },
-          { 
-            name: '📥 受け取る額', 
-            value: `約 ${Math.round(takeJpyValue).toLocaleString()} 円, $${takeUsdValue.toFixed(2)}\n約 ${finalTakeAmount.toFixed(6)} ${takeSymbol}\n*※この数値はあくまで予想であるため、実際の受取数量は多少上下する可能性があります。*`, 
-            inline: true 
+          {
+            name: '📥 受け取る額',
+            value: `約 ${Math.round(takeJpyValue).toLocaleString()} 円, $${takeUsdValue.toFixed(2)}\n約 ${finalTakeAmount.toFixed(6)} ${takeSymbol}\n*※この数値はあくまで予想であるため、実際の受取数量は多少上下する可能性があります。*`,
+            inline: true
           },
-          { 
-            name: '📌 送金先アドレス', 
-            value: `\`${userAddress}\``, 
-            inline: false 
+          {
+            name: '⏱️ 次回レート更新',
+            value: `<t:${getNextUpdateTimestamp()}:R>`,
+            inline: true
+          },
+          {
+            name: '📌 送金先アドレス',
+            value: `\`${userAddress}\``,
+            inline: false
           }
         )
         .setColor('#ffaa00')
@@ -1190,20 +1241,25 @@ export async function handleAddressModalSubmit(interaction: ModalSubmitInteracti
       .setTitle('お支払いリンクが発行されました')
       .setDescription(`以下のボタンから支払い画面を開き、お支払いを行ってください。\nお支払い完了後、**【支払い完了】**ボタンを押すと自動的に ${takeSymbol} へ両替・送金処理が実行されます（お支払いがまだの場合は1分ごとに自動監視します）。`)
       .addFields(
-        { 
-          name: '📤 支払う額', 
-          value: `${jpyAmount.toLocaleString()} 円, $${usdAmount.toFixed(2)}\n${payAmount.toFixed(6)} ${paySymbol}`, 
-          inline: true 
+        {
+          name: '📤 支払う額',
+          value: `${jpyAmount.toLocaleString()} 円, $${usdAmount.toFixed(2)}\n${payAmount.toFixed(6)} ${paySymbol}`,
+          inline: true
         },
-        { 
-          name: '📥 受け取る額', 
-          value: `約 ${Math.round(takeJpyValue).toLocaleString()} 円, $${takeUsdValue.toFixed(2)}\n約 ${finalTakeAmount.toFixed(6)} ${takeSymbol}\n*※この数値はあくまで予想であるため、実際の受取数量は多少上下する可能性があります。*`, 
-          inline: true 
+        {
+          name: '📥 受け取る額',
+          value: `約 ${Math.round(takeJpyValue).toLocaleString()} 円, $${takeUsdValue.toFixed(2)}\n約 ${finalTakeAmount.toFixed(6)} ${takeSymbol}\n*※この数値はあくまで予想であるため、実際の受取数量は多少上下する可能性があります。*`,
+          inline: true
         },
-        { 
-          name: '📌 送金先アドレス', 
-          value: `\`${userAddress}\``, 
-          inline: false 
+        {
+          name: '⏱️ 次回レート更新',
+          value: `<t:${getNextUpdateTimestamp()}:R>`,
+          inline: true
+        },
+        {
+          name: '📌 送金先アドレス',
+          value: `\`${userAddress}\``,
+          inline: false
         }
       )
       .setColor('#ffaa00')
@@ -1261,11 +1317,40 @@ export async function refreshTicketChannel(
   }
 
   try {
-    const fetchedMessages = await channel.messages.fetch({ limit: 50 });
+    // 直近メッセージから最大500件まで遡って探索
+    const allFetchedMessages: any[] = [];
+    let lastId: string | undefined = undefined;
+    for (let i = 0; i < 5; i++) {
+      const options: any = { limit: 100 };
+      if (lastId) options.before = lastId;
+      const msgs: any = await channel.messages.fetch(options);
+      if (!msgs || msgs.size === 0) break;
+      allFetchedMessages.push(...Array.from(msgs.values()));
+      lastId = msgs.last()?.id;
+
+      const hasCompleted = allFetchedMessages.some((m: any) =>
+        m.embeds?.some((e: any) => e.title === '🎉 お取引が完了しました')
+      );
+      const hasPayment = allFetchedMessages.some((m: any) =>
+        m.embeds?.some((e: any) => e.footer?.text?.startsWith('PaymentData: '))
+      );
+      const hasQuote = allFetchedMessages.some((m: any) =>
+        m.components?.some((r: any) =>
+          r.components?.some((c: any) =>
+            c.customId?.startsWith('proceed_address:') || c.customId?.startsWith('proceed_fiat_invoice:')
+          )
+        )
+      );
+
+      if (hasCompleted || hasPayment || (hasQuote && !hasPayment)) {
+        break;
+      }
+      if (msgs.size < 100) break;
+    }
 
     // 既に取引完了している場合はスキップ
-    const alreadyCompleted = Array.from(fetchedMessages.values()).some((m: any) =>
-      m.embeds.some((e: any) => e.title === '🎉 お取引が完了しました')
+    const alreadyCompleted = allFetchedMessages.some((m: any) =>
+      m.embeds?.some((e: any) => e.title === '🎉 お取引が完了しました')
     );
     if (alreadyCompleted) {
       return { success: false, message: 'このチケットのお取引は既に完了しているため、再計算は行われません。' };
@@ -1276,7 +1361,7 @@ export async function refreshTicketChannel(
     let targetQuoteMsg: any = null;
     let quoteButtonComp: any = null;
 
-    for (const msg of fetchedMessages.values() as any[]) {
+    for (const msg of allFetchedMessages) {
       // 1. PaymentData を持つメッセージ
       if (!paymentData && msg.embeds && msg.embeds.length > 0) {
         for (const embed of msg.embeds) {
@@ -1371,6 +1456,11 @@ export async function refreshTicketChannel(
               inline: true
             },
             {
+              name: '⏱️ 次回レート更新',
+              value: `<t:${getNextUpdateTimestamp()}:R>`,
+              inline: true
+            },
+            {
               name: '📌 送金先アドレス',
               value: `\`${paymentData.userAddress}\``,
               inline: false
@@ -1382,10 +1472,6 @@ export async function refreshTicketChannel(
         await targetPaymentDataMsg.edit({
           embeds: [embedInfo, embedForm],
           components: targetPaymentDataMsg.components
-        });
-
-        await channel.send({
-          content: `🔄 **【レート再計算・更新】**\n最新レートを適用しました。\n• 支払額: **${Math.round(quote.payJpyAmount).toLocaleString()} 円** (${payLabel})\n• 受取予定: **約 ${quote.finalTakeAmount.toFixed(6)} ${quote.takeSymbol}** (約 ${Math.round(quote.takeJpyValue).toLocaleString()} 円 / $${quote.takeUsdValue.toFixed(2)})`
         });
 
         return { success: true, message: '最新レートに基づいて受取数量・見積もりを再計算・更新しました。' };
@@ -1447,6 +1533,11 @@ export async function refreshTicketChannel(
               name: '📥 受け取る額',
               value: `${Math.round(quote.takeJpyValue).toLocaleString()} 円 (${takeLabel})`,
               inline: true
+            },
+            {
+              name: '⏱️ 次回レート更新',
+              value: `<t:${getNextUpdateTimestamp()}:R>`,
+              inline: true
             }
           )
           .setColor('#ffaa00')
@@ -1476,10 +1567,6 @@ export async function refreshTicketChannel(
           components: [rowAction]
         });
 
-        await channel.send({
-          content: `🔄 **【レート再計算・お支払いリンク更新】**\n最新レートに基づいて支払額を再計算し、お支払いリンクを更新しました。\n• 支払う額: **${Math.round(quote.payJpyAmount).toLocaleString()} 円 ($${quote.usdAmount.toFixed(2)} / ${quote.payAmount.toFixed(6)} ${quote.paySymbol})**\n• 受け取る額: **${Math.round(quote.takeJpyValue).toLocaleString()} 円** (${takeLabel})`
-        });
-
         return { success: true, message: '最新レートでお支払いリンクを再発行・更新しました。' };
 
       } else {
@@ -1507,6 +1594,11 @@ export async function refreshTicketChannel(
             {
               name: '📥 受け取る額',
               value: `約 ${Math.round(quote.takeJpyValue).toLocaleString()} 円, $${quote.takeUsdValue.toFixed(2)}\n約 ${quote.finalTakeAmount.toFixed(6)} ${quote.takeSymbol}\n*※この数値はあくまで予想であるため、実際の受取数量は多少上下する可能性があります。*`,
+              inline: true
+            },
+            {
+              name: '⏱️ 次回レート更新',
+              value: `<t:${getNextUpdateTimestamp()}:R>`,
               inline: true
             },
             {
@@ -1542,10 +1634,6 @@ export async function refreshTicketChannel(
           components: [rowAction]
         });
 
-        await channel.send({
-          content: `🔄 **【レート再計算・お支払いリンク更新】**\n最新レートに基づいて支払額・受取数量を再計算し、お支払いリンクを更新しました。\n• 支払う額: **${Math.round(quote.payJpyAmount).toLocaleString()} 円 ($${quote.usdAmount.toFixed(2)} / ${quote.payAmount.toFixed(6)} ${quote.paySymbol})**\n• 受取予定: **約 ${quote.finalTakeAmount.toFixed(6)} ${quote.takeSymbol}** (約 ${Math.round(quote.takeJpyValue).toLocaleString()} 円 / $${quote.takeUsdValue.toFixed(2)})`
-        });
-
         return { success: true, message: '最新レートでお支払いリンクを再発行・更新しました。' };
       }
     }
@@ -1572,7 +1660,8 @@ export async function refreshTicketChannel(
           .setTitle('📈 適用レート情報')
           .addFields(
             { name: '🇺🇸 USD/JPY', value: `${quote.usdJpyRate.toFixed(2)} 円 / 1$`, inline: true },
-            { name: `${getEmojiPrefix(quote.paySymbol) || '🪙 '}${quote.paySymbol}/USD`, value: `${Math.round(quote.payPrice * quote.usdJpyRate).toLocaleString()} 円 ($${quote.payPrice.toFixed(2)}) / 1 ${quote.paySymbol}`, inline: true }
+            { name: `${getEmojiPrefix(quote.paySymbol) || '🪙 '}${quote.paySymbol}/USD`, value: `${Math.round(quote.payPrice * quote.usdJpyRate).toLocaleString()} 円 ($${quote.payPrice.toFixed(2)}) / 1 ${quote.paySymbol}`, inline: true },
+            { name: '⏱️ 次回レート更新', value: `<t:${getNextUpdateTimestamp()}:R>`, inline: true }
           )
           .setColor('#0099ff');
 
@@ -1617,10 +1706,6 @@ export async function refreshTicketChannel(
           components: [row]
         });
 
-        await channel.send({
-          content: `🔄 **【レート再計算・見積もり更新】**\n最新レートに基づいてお見積もり内容を更新しました。`
-        });
-
         return { success: true, message: '最新レートでお見積もりを更新しました。' };
 
       } else if (quote.exchangeType === 'fiat_to_crypto') {
@@ -1631,7 +1716,8 @@ export async function refreshTicketChannel(
           .setTitle('📈 適用レート情報')
           .addFields(
             { name: '🇺🇸 USD/JPY', value: `${quote.usdJpyRate.toFixed(2)} 円 / 1$`, inline: true },
-            { name: `${getEmojiPrefix(quote.takeSymbol) || '🪙 '}${quote.takeSymbol}/USD`, value: `${Math.round(quote.takePrice * quote.usdJpyRate).toLocaleString()} 円 ($${quote.takePrice.toFixed(2)}) / 1 ${quote.takeSymbol}`, inline: true }
+            { name: `${getEmojiPrefix(quote.takeSymbol) || '🪙 '}${quote.takeSymbol}/USD`, value: `${Math.round(quote.takePrice * quote.usdJpyRate).toLocaleString()} 円 ($${quote.takePrice.toFixed(2)}) / 1 ${quote.takeSymbol}`, inline: true },
+            { name: '⏱️ 次回レート更新', value: `<t:${getNextUpdateTimestamp()}:R>`, inline: true }
           )
           .setColor('#0099ff');
 
@@ -1676,10 +1762,6 @@ export async function refreshTicketChannel(
           components: [row]
         });
 
-        await channel.send({
-          content: `🔄 **【レート再計算・見積もり更新】**\n最新レートに基づいてお見積もり内容を更新しました。`
-        });
-
         return { success: true, message: '最新レートでお見積もりを更新しました。' };
 
       } else {
@@ -1689,7 +1771,8 @@ export async function refreshTicketChannel(
           .addFields(
             { name: '🇺🇸 USD/JPY', value: `${quote.usdJpyRate.toFixed(2)} 円 / 1$`, inline: true },
             { name: `${getEmojiPrefix(quote.paySymbol) || '🪙 '}${quote.paySymbol}/USD`, value: `${Math.round(quote.payPrice * quote.usdJpyRate).toLocaleString()} 円 ($${quote.payPrice.toFixed(2)}) / 1 ${quote.paySymbol}`, inline: true },
-            { name: `${getEmojiPrefix(quote.takeSymbol) || '🪙 '}${quote.takeSymbol}/USD`, value: `${Math.round(quote.takePrice * quote.usdJpyRate).toLocaleString()} 円 ($${quote.takePrice.toFixed(2)}) / 1 ${quote.takeSymbol}`, inline: true }
+            { name: `${getEmojiPrefix(quote.takeSymbol) || '🪙 '}${quote.takeSymbol}/USD`, value: `${Math.round(quote.takePrice * quote.usdJpyRate).toLocaleString()} 円 ($${quote.takePrice.toFixed(2)}) / 1 ${quote.takeSymbol}`, inline: true },
+            { name: '⏱️ 次回レート更新', value: `<t:${getNextUpdateTimestamp()}:R>`, inline: true }
           )
           .setColor('#0099ff');
 
@@ -1732,10 +1815,6 @@ export async function refreshTicketChannel(
         await targetQuoteMsg.edit({
           embeds: [embedInfo, rateEmbed, embedForm],
           components: [row]
-        });
-
-        await channel.send({
-          content: `🔄 **【レート再計算・見積もり更新】**\n最新レートに基づいてお見積もり内容を更新しました。`
         });
 
         return { success: true, message: '最新レートでお見積もりを更新しました。' };

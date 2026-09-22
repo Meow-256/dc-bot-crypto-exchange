@@ -1,0 +1,842 @@
+<title>Crypto Exchange Fee Simulation</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+
+<style>
+  :root {
+    --bg: #090d16;
+    --surface: #111827;
+    --surface-elevated: #1a2234;
+    --border: #243049;
+    --border-light: #2d3b55;
+    --text-primary: #f8fafc;
+    --text-secondary: #94a3b8;
+    --text-muted: #64748b;
+    --accent-new: #00f090;
+    --accent-new-bg: rgba(0, 240, 144, 0.12);
+    --accent-old: #38bdf8;
+    --accent-old-bg: rgba(56, 189, 248, 0.12);
+    --accent-spread: #fbbf24;
+    --accent-crypto: #a855f7;
+    --danger: #f43f5e;
+  }
+
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]) {
+      --bg: #f8fafc;
+      --surface: #ffffff;
+      --surface-elevated: #f1f5f9;
+      --border: #e2e8f0;
+      --border-light: #cbd5e1;
+      --text-primary: #0f172a;
+      --text-secondary: #475569;
+      --text-muted: #94a3b8;
+      --accent-new: #059669;
+      --accent-new-bg: rgba(5, 150, 105, 0.12);
+      --accent-old: #0284c7;
+      --accent-old-bg: rgba(2, 132, 199, 0.12);
+      --accent-spread: #d97706;
+      --accent-crypto: #7c3aed;
+      --danger: #e11d48;
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --bg: #090d16;
+    --surface: #111827;
+    --surface-elevated: #1a2234;
+    --border: #243049;
+    --border-light: #2d3b55;
+    --text-primary: #f8fafc;
+    --text-secondary: #94a3b8;
+    --text-muted: #64748b;
+    --accent-new: #00f090;
+    --accent-new-bg: rgba(0, 240, 144, 0.12);
+    --accent-old: #38bdf8;
+    --accent-old-bg: rgba(56, 189, 248, 0.12);
+    --accent-spread: #fbbf24;
+    --accent-crypto: #a855f7;
+    --danger: #f43f5e;
+  }
+
+  * {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+  }
+
+  body {
+    background-color: var(--bg);
+    color: var(--text-primary);
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    line-height: 1.5;
+    padding: 24px 20px 48px;
+    max-width: 1200px;
+    margin: 0 auto;
+  }
+
+  .mono {
+    font-family: 'JetBrains Mono', monospace;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .header {
+    margin-bottom: 28px;
+    padding-bottom: 20px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .badge-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: var(--surface-elevated);
+    border: 1px solid var(--border);
+    padding: 4px 10px;
+    border-radius: 9999px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    margin-bottom: 12px;
+  }
+
+  .badge-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--accent-new);
+  }
+
+  h1 {
+    font-size: 26px;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    margin-bottom: 6px;
+  }
+
+  .subtitle {
+    font-size: 14px;
+    color: var(--text-secondary);
+  }
+
+  /* KPI Grid */
+  .kpi-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 16px;
+    margin-bottom: 28px;
+  }
+
+  .kpi-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 18px 20px;
+  }
+
+  .kpi-title {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-secondary);
+    margin-bottom: 8px;
+  }
+
+  .kpi-value {
+    font-size: 24px;
+    font-weight: 700;
+    margin-bottom: 4px;
+  }
+
+  .kpi-sub {
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+
+  .kpi-val-new { color: var(--accent-new); }
+  .kpi-val-old { color: var(--accent-old); }
+  .kpi-val-spread { color: var(--accent-spread); }
+
+  /* Interactive Simulator Box */
+  .sim-box {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 22px 24px;
+    margin-bottom: 28px;
+  }
+
+  .sim-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 18px;
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+
+  .sim-title {
+    font-size: 16px;
+    font-weight: 600;
+  }
+
+  .slider-container {
+    margin-bottom: 20px;
+  }
+
+  .slider-labels {
+    display: flex;
+    justify-content: space-between;
+    font-size: 13px;
+    color: var(--text-secondary);
+    margin-bottom: 8px;
+  }
+
+  input[type=range] {
+    width: 100%;
+    height: 8px;
+    background: var(--surface-elevated);
+    border-radius: 4px;
+    outline: none;
+    accent-color: var(--accent-new);
+    cursor: pointer;
+  }
+
+  .quick-btns {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-top: 10px;
+  }
+
+  .btn-chip {
+    background: var(--surface-elevated);
+    border: 1px solid var(--border);
+    color: var(--text-secondary);
+    padding: 4px 12px;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+
+  .btn-chip:hover {
+    border-color: var(--text-secondary);
+    color: var(--text-primary);
+  }
+
+  .btn-chip.active {
+    background: var(--accent-new-bg);
+    border-color: var(--accent-new);
+    color: var(--accent-new);
+    font-weight: 600;
+  }
+
+  /* Comparison Cards */
+  .comparison-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    margin-top: 16px;
+  }
+
+  @media (max-width: 640px) {
+    .comparison-grid {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  .comp-card {
+    border-radius: 10px;
+    padding: 16px;
+    border: 1px solid var(--border);
+  }
+
+  .comp-card.old {
+    background: rgba(56, 189, 248, 0.04);
+    border-color: rgba(56, 189, 248, 0.2);
+  }
+
+  .comp-card.new {
+    background: rgba(0, 240, 144, 0.04);
+    border-color: rgba(0, 240, 144, 0.3);
+  }
+
+  .comp-header {
+    display: flex;
+    justify-content: space-between;
+    font-size: 13px;
+    font-weight: 600;
+    margin-bottom: 12px;
+  }
+
+  .comp-row {
+    display: flex;
+    justify-content: space-between;
+    font-size: 13px;
+    padding: 5px 0;
+    border-bottom: 1px dashed var(--border);
+  }
+
+  .comp-row:last-child {
+    border-bottom: none;
+    font-weight: 600;
+    padding-top: 8px;
+  }
+
+  .comp-row .label { color: var(--text-secondary); }
+
+  /* Charts Layout */
+  .charts-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(500px, 1fr));
+    gap: 20px;
+    margin-bottom: 28px;
+  }
+
+  @media (max-width: 600px) {
+    .charts-grid {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  .chart-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 20px;
+  }
+
+  .chart-title {
+    font-size: 15px;
+    font-weight: 600;
+    margin-bottom: 4px;
+  }
+
+  .chart-desc {
+    font-size: 12px;
+    color: var(--text-secondary);
+    margin-bottom: 16px;
+  }
+
+  .chart-wrapper {
+    position: relative;
+    height: 280px;
+    width: 100%;
+  }
+
+  /* Table Section */
+  .table-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 20px;
+    overflow-x: auto;
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+    text-align: right;
+  }
+
+  th, td {
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  th {
+    background: var(--surface-elevated);
+    color: var(--text-secondary);
+    font-weight: 600;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  th:first-child, td:first-child {
+    text-align: left;
+  }
+
+  tbody tr:hover {
+    background: var(--surface-elevated);
+  }
+
+  .pill {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 600;
+  }
+
+  .pill-new { background: var(--accent-new-bg); color: var(--accent-new); }
+  .pill-old { background: var(--accent-old-bg); color: var(--accent-old); }
+
+  .diff-tag {
+    color: var(--accent-new);
+    font-size: 11px;
+    font-weight: 600;
+    margin-left: 4px;
+  }
+</style>
+
+<div class="header">
+  <div class="badge-tag">
+    <div class="badge-dot"></div>
+    手数料改定シミュレーション
+  </div>
+  <h1>暗号通貨両替 手数料・利益率 比較シミュレーター</h1>
+  <p class="subtitle">為替スプレッド (+2%) ＆ 暗号通貨価格スプレッド (+1%) 導入による運営利益と受取額の比較分析</p>
+</div>
+
+<!-- KPI Cards -->
+<div class="kpi-grid">
+  <div class="kpi-card">
+    <div class="kpi-title">基本条件 (10,000円 取引時)</div>
+    <div class="kpi-value mono kpi-val-new">11.08% <span style="font-size:14px;font-weight:500;color:var(--text-secondary);">実効手数料</span></div>
+    <div class="kpi-sub">従来(8.00%)比: <span class="diff-tag">+3.08% 利益増</span></div>
+  </div>
+  <div class="kpi-card">
+    <div class="kpi-title">運営利益 (10,000円あたり)</div>
+    <div class="kpi-value mono kpi-val-new">¥1,108 <span style="font-size:14px;font-weight:500;color:var(--text-secondary);">($7.39)</span></div>
+    <div class="kpi-sub">従来 (¥800 / $5.33) 比: <span class="diff-tag">+¥308 増益</span></div>
+  </div>
+  <div class="kpi-card">
+    <div class="kpi-title">少額取引 (1,000円 取引時)</div>
+    <div class="kpi-value mono kpi-val-spread">18.00% <span style="font-size:14px;font-weight:500;color:var(--text-secondary);">実効手数料</span></div>
+    <div class="kpi-sub">最低手数料 $1.00 (¥153) 保証で赤字防止</div>
+  </div>
+  <div class="kpi-card">
+    <div class="kpi-title">スプレッド構成比</div>
+    <div class="kpi-value mono">為替2% + 基本8% + 暗号1%</div>
+    <div class="kpi-sub">スワップコスト($0.1)除外・最低$1.00保証</div>
+  </div>
+</div>
+
+<!-- Interactive Simulator -->
+<div class="sim-box">
+  <div class="sim-header">
+    <div class="sim-title">📊 リアルタイム取引シミュレーター</div>
+    <div class="mono" style="font-size: 18px; font-weight: 700; color: var(--accent-new);">
+      指定金額: <span id="currentJpyDisplay">10,000</span> 円
+    </div>
+  </div>
+
+  <div class="slider-container">
+    <div class="slider-labels">
+      <span>¥1,000</span>
+      <span>¥50,000</span>
+      <span>¥100,000</span>
+    </div>
+    <input type="range" id="jpySlider" min="1000" max="100000" step="500" value="10000">
+    <div class="quick-btns">
+      <button class="btn-chip" onclick="setSimAmount(1000)">¥1,000</button>
+      <button class="btn-chip" onclick="setSimAmount(3000)">¥3,000</button>
+      <button class="btn-chip" onclick="setSimAmount(5000)">¥5,000</button>
+      <button class="btn-chip active" onclick="setSimAmount(10000)">¥10,000</button>
+      <button class="btn-chip" onclick="setSimAmount(30000)">¥30,000</button>
+      <button class="btn-chip" onclick="setSimAmount(50000)">¥50,000</button>
+      <button class="btn-chip" onclick="setSimAmount(100000)">¥100,000</button>
+    </div>
+  </div>
+
+  <div class="comparison-grid">
+    <!-- Old Calculation -->
+    <div class="comp-card old">
+      <div class="comp-header">
+        <span style="color: var(--accent-old);">従来の計算 (通常レート)</span>
+        <span class="mono" id="oldEffRate">8.00%</span>
+      </div>
+      <div class="comp-row">
+        <span class="label">USD換算レート</span>
+        <span class="mono">1 USD = 150.00 円</span>
+      </div>
+      <div class="comp-row">
+        <span class="label">換算USD額</span>
+        <span class="mono" id="oldUsd">$66.67</span>
+      </div>
+      <div class="comp-row">
+        <span class="label">システム手数料 (8% / min $1)</span>
+        <span class="mono" id="oldSysFee">$5.33 (¥800)</span>
+      </div>
+      <div class="comp-row">
+        <span class="label">BTC適用価格 ($90,000)</span>
+        <span class="mono">$90,000.00</span>
+      </div>
+      <div class="comp-row">
+        <span class="label">受取BTC数量 (手数料差引後)</span>
+        <span class="mono" style="color:var(--accent-old); font-weight:700;" id="oldBtc">0.00063148 BTC</span>
+      </div>
+      <div class="comp-row">
+        <span class="label">運営利益 (USD換算)</span>
+        <span class="mono" id="oldProfit">$5.33 (¥800)</span>
+      </div>
+    </div>
+
+    <!-- New Calculation -->
+    <div class="comp-card new">
+      <div class="comp-header">
+        <span style="color: var(--accent-new);">新計算 (為替+2% & 暗号+1%)</span>
+        <span class="mono" id="newEffRate">11.08%</span>
+      </div>
+      <div class="comp-row">
+        <span class="label">USD換算レート (+2%)</span>
+        <span class="mono" style="color:var(--accent-spread);">1 USD = 153.00 円</span>
+      </div>
+      <div class="comp-row">
+        <span class="label">換算USD額</span>
+        <span class="mono" id="newUsd">$65.36</span>
+      </div>
+      <div class="comp-row">
+        <span class="label">システム手数料 (8% / min $1)</span>
+        <span class="mono" id="newSysFee">$5.23 (¥800)</span>
+      </div>
+      <div class="comp-row">
+        <span class="label">BTC適用価格 (+1%スプレッド)</span>
+        <span class="mono" style="color:var(--accent-crypto);">$90,900.00</span>
+      </div>
+      <div class="comp-row">
+        <span class="label">受取BTC数量 (手数料差引後)</span>
+        <span class="mono" style="color:var(--accent-new); font-weight:700;" id="newBtc">0.00061141 BTC</span>
+      </div>
+      <div class="comp-row">
+        <span class="label">運営実質利益 (為替+基本+コイン差)</span>
+        <span class="mono" style="color:var(--accent-new);" id="newProfit">$7.39 (¥1,108)</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Charts Grid -->
+<div class="charts-grid">
+  <!-- Chart 1: Effective Fee Rate -->
+  <div class="chart-card">
+    <div class="chart-title">📈 金額帯別の実効手数料率 (%)</div>
+    <div class="chart-desc">少額時は最低手数料($1.00)が効き、通常時は約11%で安定して高い利益率を確保</div>
+    <div class="chart-wrapper">
+      <canvas id="rateChart"></canvas>
+    </div>
+  </div>
+
+  <!-- Chart 2: Profit Comparison -->
+  <div class="chart-card">
+    <div class="chart-title">💰 運営利益額の比較 (日本円)</div>
+    <div class="chart-desc">新計算により取引1件あたり約38%の利益増加を実現</div>
+    <div class="chart-wrapper">
+      <canvas id="profitChart"></canvas>
+    </div>
+  </div>
+
+  <!-- Chart 3: Fee Breakdown -->
+  <div class="chart-card">
+    <div class="chart-title">🧱 新計算の手数料・スプレッド内訳 (スタック比率)</div>
+    <div class="chart-desc">為替スプレッド(2%) ＋ 基本手数料(8%) ＋ 暗号通貨スプレッド(1%) の構成</div>
+    <div class="chart-wrapper">
+      <canvas id="breakdownChart"></canvas>
+    </div>
+  </div>
+
+  <!-- Chart 4: BTC Payout Comparison -->
+  <div class="chart-card">
+    <div class="chart-title">🪙 ユーザー受取BTC数量の比較</div>
+    <div class="chart-desc">不自然な激減を感じさせず、自然な市場スプレッドとして吸収される差額</div>
+    <div class="chart-wrapper">
+      <canvas id="payoutChart"></canvas>
+    </div>
+  </div>
+</div>
+
+<!-- Detailed Data Table -->
+<div class="table-card">
+  <div style="font-size:15px; font-weight:600; margin-bottom:12px;">📋 金額帯別 詳細比較データ表</div>
+  <table>
+    <thead>
+      <tr>
+        <th>支払金額 (JPY)</th>
+        <th>従来 運営利益</th>
+        <th>従来 手数料率</th>
+        <th>新計算 運営利益</th>
+        <th>新計算 手数料率</th>
+        <th>運営利益 増加額</th>
+        <th>受取BTC差額</th>
+      </tr>
+    </thead>
+    <tbody id="tableBody">
+      <!-- Generated via JS -->
+    </tbody>
+  </table>
+</div>
+
+<script>
+  const baseUsdJpy = 150.0;
+  const newUsdJpy = 150.0 * 1.02; // 153.0 (+2%)
+  const btcBasePrice = 90000.0;
+  const btcNewPrice = 90000.0 * 1.01; // 90900.0 (+1%)
+  const withdrawFeeBtc = 0.00005; // 約$4.5相当
+
+  const tiers = [1000, 2000, 3000, 5000, 10000, 20000, 30000, 50000, 100000];
+
+  function calcOld(jpy) {
+    const usd = jpy / baseUsdJpy;
+    const sysFeeUsd = Math.max(usd * 0.08, 1.0);
+    const afterFeeUsd = usd - sysFeeUsd;
+    const btcAmount = Math.max(0, (afterFeeUsd / btcBasePrice) - withdrawFeeBtc);
+    const userValueJpy = btcAmount * btcBasePrice * baseUsdJpy;
+    const totalProfitJpy = Math.max(0, jpy - userValueJpy - (withdrawFeeBtc * btcBasePrice * baseUsdJpy));
+    const effectiveFeeRate = (totalProfitJpy / jpy) * 100;
+    return { usd, sysFeeUsd, afterFeeUsd, btcAmount, totalProfitJpy, effectiveFeeRate };
+  }
+
+  function calcNew(jpy) {
+    const usd = jpy / newUsdJpy; // 為替+2% (153円換算)
+    const sysFeeUsd = Math.max(usd * 0.08, 1.0); // 最低手数料 $1.00
+    const afterFeeUsd = usd - sysFeeUsd;
+    const btcAmount = Math.max(0, (afterFeeUsd / btcNewPrice) - withdrawFeeBtc); // 暗号価格+1%
+    const userValueJpy = btcAmount * btcBasePrice * baseUsdJpy; // ユーザーの実質受取日本円価値
+    const totalProfitJpy = Math.max(0, jpy - userValueJpy - (withdrawFeeBtc * btcBasePrice * baseUsdJpy)); // 運営の実質純利益
+    const effectiveFeeRate = (totalProfitJpy / jpy) * 100;
+
+    // 内訳
+    const fxSpreadJpy = jpy * (1 - (1 / 1.02)); // 約1.96%
+    const baseFeeJpy = sysFeeUsd * baseUsdJpy;
+    const cryptoSpreadJpy = (afterFeeUsd * baseUsdJpy) * (1 - (1 / 1.01));
+
+    return { usd, sysFeeUsd, afterFeeUsd, btcAmount, totalProfitJpy, effectiveFeeRate, fxSpreadJpy, baseFeeJpy, cryptoSpreadJpy };
+  }
+
+  function updateSimulation(jpy) {
+    document.getElementById('currentJpyDisplay').innerText = Number(jpy).toLocaleString();
+    const oldRes = calcOld(jpy);
+    const newRes = calcNew(jpy);
+
+    document.getElementById('oldEffRate').innerText = oldRes.effectiveFeeRate.toFixed(2) + '%';
+    document.getElementById('oldUsd').innerText = '$' + oldRes.usd.toFixed(2);
+    document.getElementById('oldSysFee').innerText = '$' + oldRes.sysFeeUsd.toFixed(2) + ' (¥' + Math.round(oldRes.sysFeeUsd * baseUsdJpy).toLocaleString() + ')';
+    document.getElementById('oldBtc').innerText = oldRes.btcAmount.toFixed(8) + ' BTC';
+    document.getElementById('oldProfit').innerText = '$' + (oldRes.totalProfitJpy / baseUsdJpy).toFixed(2) + ' (¥' + Math.round(oldRes.totalProfitJpy).toLocaleString() + ')';
+
+    document.getElementById('newEffRate').innerText = newRes.effectiveFeeRate.toFixed(2) + '%';
+    document.getElementById('newUsd').innerText = '$' + newRes.usd.toFixed(2);
+    document.getElementById('newSysFee').innerText = '$' + newRes.sysFeeUsd.toFixed(2) + ' (¥' + Math.round(newRes.sysFeeUsd * newUsdJpy).toLocaleString() + ')';
+    document.getElementById('newBtc').innerText = newRes.btcAmount.toFixed(8) + ' BTC';
+    document.getElementById('newProfit').innerText = '$' + (newRes.totalProfitJpy / baseUsdJpy).toFixed(2) + ' (¥' + Math.round(newRes.totalProfitJpy).toLocaleString() + ')';
+  }
+
+  function setSimAmount(amt) {
+    document.getElementById('jpySlider').value = amt;
+    document.querySelectorAll('.btn-chip').forEach(btn => {
+      btn.classList.toggle('active', btn.innerText === '¥' + amt.toLocaleString());
+    });
+    updateSimulation(amt);
+  }
+
+  document.getElementById('jpySlider').addEventListener('input', (e) => {
+    updateSimulation(e.target.value);
+  });
+
+  // Render Data Table
+  const tbody = document.getElementById('tableBody');
+  tiers.forEach(t => {
+    const o = calcOld(t);
+    const n = calcNew(t);
+    const diffProfit = n.totalProfitJpy - o.totalProfitJpy;
+    const diffBtc = o.btcAmount - n.btcAmount;
+
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td class="mono"><strong>¥${t.toLocaleString()}</strong></td>
+      <td class="mono">¥${Math.round(o.totalProfitJpy).toLocaleString()}</td>
+      <td class="mono"><span class="pill pill-old">${o.effectiveFeeRate.toFixed(2)}%</span></td>
+      <td class="mono" style="color:var(--accent-new);font-weight:600;">¥${Math.round(n.totalProfitJpy).toLocaleString()}</td>
+      <td class="mono"><span class="pill pill-new">${n.effectiveFeeRate.toFixed(2)}%</span></td>
+      <td class="mono" style="color:var(--accent-new); font-weight:600;">+¥${Math.round(diffProfit).toLocaleString()} <span style="font-size:11px;color:var(--text-muted);">(+${((diffProfit/o.totalProfitJpy)*100).toFixed(0)}%)</span></td>
+      <td class="mono" style="color:var(--text-muted);">-${diffBtc.toFixed(8)} BTC</td>
+    `;
+    tbody.appendChild(tr);
+  });
+
+  // Chart setup
+  const chartLabels = tiers.map(t => '¥' + t.toLocaleString());
+  const isDark = true;
+  const gridColor = isDark ? '#1e293b' : '#e2e8f0';
+  const textColor = isDark ? '#94a3b8' : '#64748b';
+
+  Chart.defaults.color = textColor;
+  Chart.defaults.borderColor = gridColor;
+  Chart.defaults.font.family = 'Inter, sans-serif';
+
+  // 1. Rate Chart
+  new Chart(document.getElementById('rateChart'), {
+    type: 'line',
+    data: {
+      labels: chartLabels,
+      datasets: [
+        {
+          label: '新計算 (為替+2% & 暗号+1%)',
+          data: tiers.map(t => calcNew(t).effectiveFeeRate),
+          borderColor: '#00f090',
+          backgroundColor: 'rgba(0, 240, 144, 0.1)',
+          borderWidth: 2.5,
+          tension: 0.3,
+          fill: true,
+          pointRadius: 4,
+          pointBackgroundColor: '#00f090'
+        },
+        {
+          label: '従来の計算 (8%)',
+          data: tiers.map(t => calcOld(t).effectiveFeeRate),
+          borderColor: '#38bdf8',
+          borderDash: [5, 5],
+          borderWidth: 2,
+          tension: 0.3,
+          pointRadius: 4,
+          pointBackgroundColor: '#38bdf8'
+        }
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        tooltip: {
+          callbacks: {
+            label: (ctx) => `${ctx.dataset.label}: ${ctx.raw.toFixed(2)}%`
+          }
+        }
+      },
+      scales: {
+        y: {
+          ticks: { callback: v => v + '%' },
+          title: { display: true, text: '実効手数料率 (%)' }
+        }
+      }
+    }
+  });
+
+  // 2. Profit Chart
+  new Chart(document.getElementById('profitChart'), {
+    type: 'bar',
+    data: {
+      labels: chartLabels,
+      datasets: [
+        {
+          label: '新計算 運営利益',
+          data: tiers.map(t => calcNew(t).totalProfitJpy),
+          backgroundColor: '#00f090',
+          borderRadius: 4
+        },
+        {
+          label: '従来 運営利益',
+          data: tiers.map(t => calcOld(t).totalProfitJpy),
+          backgroundColor: '#38bdf8',
+          borderRadius: 4
+        }
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        tooltip: {
+          callbacks: {
+            label: (ctx) => `${ctx.dataset.label}: ¥${Math.round(ctx.raw).toLocaleString()}`
+          }
+        }
+      },
+      scales: {
+        y: {
+          ticks: { callback: v => '¥' + Number(v).toLocaleString() },
+          title: { display: true, text: '運営利益額 (円)' }
+        }
+      }
+    }
+  });
+
+  // 3. Breakdown Chart
+  new Chart(document.getElementById('breakdownChart'), {
+    type: 'bar',
+    data: {
+      labels: chartLabels,
+      datasets: [
+        {
+          label: '基本システム手数料 (8% / min $1)',
+          data: tiers.map(t => calcNew(t).baseFeeJpy),
+          backgroundColor: '#38bdf8',
+          borderRadius: 2
+        },
+        {
+          label: '為替スプレッド (+2%)',
+          data: tiers.map(t => calcNew(t).fxSpreadJpy),
+          backgroundColor: '#fbbf24',
+          borderRadius: 2
+        },
+        {
+          label: '暗号通貨スプレッド (+1%)',
+          data: tiers.map(t => calcNew(t).cryptoSpreadJpy),
+          backgroundColor: '#a855f7',
+          borderRadius: 2
+        }
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      scales: {
+        x: { stacked: true },
+        y: {
+          stacked: true,
+          ticks: { callback: v => '¥' + Number(v).toLocaleString() },
+          title: { display: true, text: '手数料構成額 (円)' }
+        }
+      }
+    }
+  });
+
+  // 4. Payout Chart
+  new Chart(document.getElementById('payoutChart'), {
+    type: 'line',
+    data: {
+      labels: chartLabels,
+      datasets: [
+        {
+          label: '従来 受取BTC',
+          data: tiers.map(t => calcOld(t).btcAmount * 1000), // mBTC
+          borderColor: '#38bdf8',
+          borderWidth: 2,
+          pointRadius: 4
+        },
+        {
+          label: '新計算 受取BTC',
+          data: tiers.map(t => calcNew(t).btcAmount * 1000), // mBTC
+          borderColor: '#00f090',
+          borderWidth: 2.5,
+          pointRadius: 4
+        }
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        tooltip: {
+          callbacks: {
+            label: (ctx) => `${ctx.dataset.label}: ${(ctx.raw / 1000).toFixed(8)} BTC`
+          }
+        }
+      },
+      scales: {
+        y: {
+          ticks: { callback: v => (v / 1000).toFixed(4) + ' BTC' },
+          title: { display: true, text: '受取数量 (BTC)' }
+        }
+      }
+    }
+  });
+
+  // Initial update
+  updateSimulation(10000);
+</script>
