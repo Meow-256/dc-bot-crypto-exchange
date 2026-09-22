@@ -28,7 +28,9 @@ import {
   handleFiatReceiveInputLink,
   handleFiatReceiveInputSubmit,
   handleFiatReceiveStaffConfirm,
-  handleFiatReceiveConfirmed
+  handleFiatReceiveConfirmed,
+  handleRefreshCommand,
+  refreshTicketChannel
 } from './ticket';
 import { startWebServer } from './web/server';
 import { getTotalUsdVolume, getTotalJpyVolume } from './transactions';
@@ -107,6 +109,42 @@ client.once('clientReady', async () => {
         console.error('Error in scheduled updateUsdJpyRate/StatsVC:', err);
       }
     }, 720000); // 12分に1回 (12 * 60 * 1000)
+
+    // 20分に1回チケットのレート・見積もり・請求書の再計算・更新を実行
+    setInterval(async () => {
+      try {
+        await updateUsdJpyRate();
+        console.log('[Scheduled Refresh] Running 20-minute ticket rate refresh...');
+        const categoryId = process.env.TICKET_CATEGORY_ID;
+
+        for (const guild of client.guilds.cache.values()) {
+          try {
+            const channels = await guild.channels.fetch();
+            for (const ch of channels.values()) {
+              if (
+                ch &&
+                ch.isTextBased() &&
+                !ch.isDMBased() &&
+                (ch.name.startsWith('exch-') || (categoryId && 'parentId' in ch && ch.parentId === categoryId))
+              ) {
+                try {
+                  const res = await refreshTicketChannel(ch, false);
+                  if (res.success) {
+                    console.log(`[Scheduled Refresh] Successfully refreshed ticket channel: #${ch.name} (${ch.id})`);
+                  }
+                } catch (chErr) {
+                  console.error(`[Scheduled Refresh] Error refreshing ticket channel #${ch.name} (${ch.id}):`, chErr);
+                }
+              }
+            }
+          } catch (guildErr) {
+            console.error(`[Scheduled Refresh] Error fetching channels for guild ${guild.id}:`, guildErr);
+          }
+        }
+      } catch (err) {
+        console.error('Error in scheduled 20-minute ticket refresh:', err);
+      }
+    }, 20 * 60 * 1000); // 20分に1回 (20 * 60 * 1000 ms)
   } catch (err) {
     console.error('Failed to initialize USD_JPY rate:', err);
   }
@@ -114,7 +152,7 @@ client.once('clientReady', async () => {
   await registerCommands();
 });
 
-// メッセージイベント受信 (.mark as completed 用)
+// メッセージイベント受信 (.mark as completed / .refresh 用)
 client.on('messageCreate', async (message) => {
   if (message.author.bot) return;
 
@@ -124,6 +162,12 @@ client.on('messageCreate', async (message) => {
       await handleMarkAsCompletedCommand(message);
     } catch (error) {
       console.error('Error handling mark as completed command:', error);
+    }
+  } else if (content === '.refresh') {
+    try {
+      await handleRefreshCommand(message);
+    } catch (error) {
+      console.error('Error handling refresh command:', error);
     }
   }
 });

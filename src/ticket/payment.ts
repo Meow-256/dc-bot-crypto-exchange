@@ -19,6 +19,7 @@ import { activePollings, fiatTakeOptions, stopPollingForChannel, formatWithEmoji
 import { requestOxaPay } from '../oxapay';
 import { sendTransactionLogEmbed } from '../logger';
 import { saveTransactionRecord, updateTransactionPrivacy } from '../transactions';
+import { refreshTicketChannel } from './exchange';
 
 export interface PendingPrivacyLog {
   userId: string;
@@ -1326,6 +1327,42 @@ export async function handleMarkAsCompletedCommand(message: Message) {
     const supportRoleId = process.env.SUPPORT_ROLE_ID;
     const mentionContent = supportRoleId ? `<@&${supportRoleId}>` : '@Support';
     await message.reply(`Error ${mentionContent}`);
+  }
+}
+
+/**
+ * スタッフによる `.refresh` メッセージコマンド処理 (最新レートでの再計算・更新)
+ */
+export async function handleRefreshCommand(message: Message) {
+  const member = message.member;
+  if (!member) return;
+
+  const supportRoleId = process.env.SUPPORT_ROLE_ID;
+  let hasSupportRole = false;
+  if (supportRoleId) {
+    if (Array.isArray(member.roles)) {
+      hasSupportRole = member.roles.includes(supportRoleId);
+    } else {
+      hasSupportRole = member.roles.cache.has(supportRoleId);
+    }
+  }
+  const isAdministrator = typeof member.permissions !== 'string' && member.permissions.has(PermissionFlagsBits.Administrator);
+
+  if (!hasSupportRole && !isAdministrator) {
+    return;
+  }
+
+  const channel = message.channel;
+  if (!('messages' in channel)) return;
+
+  try {
+    const result = await refreshTicketChannel(channel, true);
+    if (!result.success) {
+      await message.reply(`⚠️ ${result.message}`);
+    }
+  } catch (error: any) {
+    console.error('Failed to execute handleRefreshCommand:', error);
+    await message.reply(`⚠️ 再計算処理中にエラーが発生しました: ${error.message || String(error)}`);
   }
 }
 
