@@ -3,8 +3,10 @@ import fs from 'fs';
 import path from 'path';
 import { getTotalUsdVolume, getTotalJpyVolume } from '../transactions';
 import { currentUsdJpyRate, getSystemFeeRate } from '../config';
+import { Client } from 'discord.js';
+import { handleOxaPayWebhook } from '../ticket/payment';
 
-export function startWebServer() {
+export function startWebServer(client?: Client) {
   const app = express();
   const port = process.env.WEB_PORT || 4000;
   const logsDir = path.join(process.cwd(), 'logs');
@@ -46,6 +48,37 @@ export function startWebServer() {
     } catch (err: any) {
       console.error('[API /api/stats] Error:', err);
       res.status(500).json({ success: false, error: 'Internal Server Error' });
+    }
+  });
+
+  // OxaPay Webhook Endpoint (0秒・完全自動即時着金検知)
+  app.post(['/api/oxapay/webhook', '/api/oxapay/webhook/:trackId'], (req: Request, res: Response) => {
+    try {
+      const mergedPayload = {
+        ...req.query,
+        ...req.body,
+        ...(req.params.trackId ? { trackId: req.params.trackId } : {})
+      };
+      console.log('[API /api/oxapay/webhook] Received payload:', JSON.stringify(mergedPayload));
+
+      if (!client) {
+        console.warn('[API /api/oxapay/webhook] Discord client is not initialized on web server.');
+        res.status(500).json({ success: false, error: 'Discord client not available' });
+        return;
+      }
+
+      // OxaPay への即時応答（タイムアウト防止）
+      res.status(200).json({ result: 100, message: 'Webhook received successfully' });
+
+      // バックグラウンドで即座にスワップ・送金・チケット完了処理を実行
+      handleOxaPayWebhook(mergedPayload, client).catch((err) => {
+        console.error('[API /api/oxapay/webhook] Error in handleOxaPayWebhook execution:', err);
+      });
+    } catch (err: any) {
+      console.error('[API /api/oxapay/webhook] Error handling request:', err);
+      if (!res.headersSent) {
+        res.status(500).json({ success: false, error: 'Internal Server Error' });
+      }
     }
   });
 

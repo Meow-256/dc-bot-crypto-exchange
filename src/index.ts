@@ -5,6 +5,8 @@ import { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder } from 'di
 import dotenv from 'dotenv';
 import {
   setupTicketPanel,
+  setupFeePanel,
+  setupPaymentMethodsPanel,
   createTicketChannel,
   closeTicketChannel,
   handleConfirmCloseTicket,
@@ -26,6 +28,7 @@ import {
   handleFiatSendPassButton,
   handleFiatSendCompleteButton,
   handleFiatReceiveCompleteButton,
+  handleFiatClaimCompleteButton,
   handleFiatSendModalSubmit,
   updateUsdJpyRate,
   handleFiatReceiveInputLink,
@@ -33,7 +36,25 @@ import {
   handleFiatReceiveStaffConfirm,
   handleFiatReceiveConfirmed,
   handleRefreshCommand,
-  refreshTicketChannel
+  refreshTicketChannel,
+  handleMMSelectPartner,
+  handleMMRoleChoice,
+  handleMMConfirmRoleButton,
+  handleMMResetRoleButton,
+  showMMSellerItemModal,
+  handleMMSellerItemSubmit,
+  handleMMPayMethodSelect,
+  handleMMResetPayButton,
+  handleMMAgreeButton,
+  handleMMCheckOxaPayButton,
+  showMMFiatInputModal,
+  handleMMFiatSubmit,
+  handleMMFiatReceiveConfirmed,
+  handleMMSellerRefundButton,
+  showMMSellerAddressModal,
+  handleMMSellerAddressSubmit,
+  handleMMItemReceived,
+  advanceMiddlemanTurn
 } from './ticket';
 import { startWebServer } from './web/server';
 import { getTotalUsdVolume, getTotalJpyVolume } from './transactions';
@@ -68,6 +89,14 @@ async function registerCommands() {
     new SlashCommandBuilder()
       .setName('setup-ticket')
       .setDescription('チケット作成用パネルをこのチャンネルに設置します。')
+      .toJSON(),
+    new SlashCommandBuilder()
+      .setName('setup-fees')
+      .setDescription('取引手数料パネルをこのチャンネルに設置します。')
+      .toJSON(),
+    new SlashCommandBuilder()
+      .setName('setup-payments')
+      .setDescription('対応通貨・決済方法一覧パネルをこのチャンネルに設置します。')
       .toJSON(),
     new SlashCommandBuilder()
       .setName('close')
@@ -184,7 +213,7 @@ client.once('clientReady', async () => {
   await registerCommands();
 });
 
-// メッセージイベント受信 (.mark as completed / .refresh 用)
+// メッセージイベント受信 (.mark as completed / .refresh / .next 用)
 client.on('messageCreate', async (message) => {
   if (message.author.bot) return;
 
@@ -201,6 +230,14 @@ client.on('messageCreate', async (message) => {
     } catch (error) {
       console.error('Error handling refresh command:', error);
     }
+  } else if (content === '.next') {
+    try {
+      if (message.channel.isTextBased() && 'name' in message.channel) {
+        await advanceMiddlemanTurn(message.channel as any, message);
+      }
+    } catch (error) {
+      console.error('Error handling .next command:', error);
+    }
   }
 });
 
@@ -211,6 +248,18 @@ client.on('interactionCreate', async (interaction) => {
         await setupTicketPanel(interaction);
       } catch (error) {
         console.error('Error executing setup-ticket:', error);
+      }
+    } else if (interaction.commandName === 'setup-fees') {
+      try {
+        await setupFeePanel(interaction);
+      } catch (error) {
+        console.error('Error executing setup-fees:', error);
+      }
+    } else if (interaction.commandName === 'setup-payments') {
+      try {
+        await setupPaymentMethodsPanel(interaction);
+      } catch (error) {
+        console.error('Error executing setup-payments:', error);
       }
     } else if (interaction.commandName === 'close') {
       try {
@@ -310,6 +359,12 @@ client.on('interactionCreate', async (interaction) => {
       } catch (error) {
         console.error('Error processing fiat receive complete:', error);
       }
+    } else if (interaction.customId.startsWith('fiat_claim_complete:')) {
+      try {
+        await handleFiatClaimCompleteButton(interaction);
+      } catch (error) {
+        console.error('Error processing fiat claim complete button:', error);
+      }
     } else if (interaction.customId === 'fiat_receive_input_link') {
       try {
         await handleFiatReceiveInputLink(interaction);
@@ -328,6 +383,94 @@ client.on('interactionCreate', async (interaction) => {
       } catch (error) {
         console.error('Error processing fiat receive confirmed:', error);
       }
+    } else if (interaction.customId.startsWith('mm_role:')) {
+      try {
+        await handleMMRoleChoice(interaction);
+      } catch (error) {
+        console.error('Error processing MM role choice:', error);
+      }
+    } else if (interaction.customId === 'mm_btn_confirm_role') {
+      try {
+        await handleMMConfirmRoleButton(interaction);
+      } catch (error) {
+        console.error('Error handling MM confirm role button:', error);
+      }
+    } else if (interaction.customId === 'mm_btn_reset_role') {
+      try {
+        await handleMMResetRoleButton(interaction);
+      } catch (error) {
+        console.error('Error handling MM reset role button:', error);
+      }
+    } else if (interaction.customId === 'mm_btn_seller_set_item') {
+      try {
+        await showMMSellerItemModal(interaction);
+      } catch (error) {
+        console.error('Error opening MM seller item modal:', error);
+      }
+    } else if (interaction.customId === 'mm_btn_reset_pay') {
+      try {
+        await handleMMResetPayButton(interaction);
+      } catch (error) {
+        console.error('Error handling MM reset pay button:', error);
+      }
+    } else if (interaction.customId === 'mm_btn_agree') {
+      try {
+        await handleMMAgreeButton(interaction);
+      } catch (error) {
+        console.error('Error handling MM agree button:', error);
+      }
+    } else if (interaction.customId === 'mm_btn_check_oxapay') {
+      try {
+        await handleMMCheckOxaPayButton(interaction);
+      } catch (error) {
+        console.error('Error handling MM check OxaPay button:', error);
+      }
+    } else if (interaction.customId === 'mm_btn_fiat_input') {
+      try {
+        await showMMFiatInputModal(interaction);
+      } catch (error) {
+        console.error('Error opening MM fiat input modal:', error);
+      }
+    } else if (interaction.customId.startsWith('mm_fiat_receive_confirmed:')) {
+      try {
+        await handleMMFiatReceiveConfirmed(interaction);
+      } catch (error) {
+        console.error('Error handling MM fiat receive confirmed button:', error);
+      }
+    } else if (interaction.customId === 'mm_btn_seller_refund') {
+      try {
+        await handleMMSellerRefundButton(interaction);
+      } catch (error) {
+        console.error('Error handling MM seller refund button:', error);
+      }
+    } else if (interaction.customId === 'mm_btn_seller_input_address') {
+      try {
+        await showMMSellerAddressModal(interaction);
+      } catch (error) {
+        console.error('Error opening MM seller address modal:', error);
+      }
+    } else if (interaction.customId === 'mm_btn_item_received') {
+      try {
+        await handleMMItemReceived(interaction);
+      } catch (error) {
+        console.error('Error handling MM item received button:', error);
+      }
+    } else if (interaction.customId === 'mm_btn_next') {
+      try {
+        if (interaction.channel && 'name' in interaction.channel) {
+          await advanceMiddlemanTurn(interaction.channel as any, interaction);
+        }
+      } catch (error) {
+        console.error('Error advancing MM turn via button:', error);
+      }
+    }
+  } else if (interaction.isUserSelectMenu()) {
+    if (interaction.customId === 'mm_select_partner') {
+      try {
+        await handleMMSelectPartner(interaction);
+      } catch (error) {
+        console.error('Error processing MM select partner:', error);
+      }
     }
   } else if (interaction.isStringSelectMenu()) {
     if (interaction.customId === 'exchange_type') {
@@ -335,6 +478,12 @@ client.on('interactionCreate', async (interaction) => {
         await handleExchangeTypeSelect(interaction);
       } catch (error) {
         console.error('Error processing exchange type select menu:', error);
+      }
+    } else if (interaction.customId === 'mm_select_pay_method') {
+      try {
+        await handleMMPayMethodSelect(interaction);
+      } catch (error) {
+        console.error('Error processing MM pay method select menu:', error);
       }
     } else if (interaction.customId.startsWith('exchange_give') || interaction.customId.startsWith('exchange_take')) {
       try {
@@ -368,6 +517,24 @@ client.on('interactionCreate', async (interaction) => {
       } catch (error) {
         console.error('Error processing fiat receive modal submit:', error);
       }
+    } else if (interaction.customId === 'mm_modal_seller_item_submit') {
+      try {
+        await handleMMSellerItemSubmit(interaction);
+      } catch (error) {
+        console.error('Error processing MM seller item modal submit:', error);
+      }
+    } else if (interaction.customId === 'mm_modal_seller_address_submit') {
+      try {
+        await handleMMSellerAddressSubmit(interaction);
+      } catch (error) {
+        console.error('Error processing MM seller address modal submit:', error);
+      }
+    } else if (interaction.customId === 'mm_modal_fiat_submit') {
+      try {
+        await handleMMFiatSubmit(interaction);
+      } catch (error) {
+        console.error('Error processing MM fiat modal submit:', error);
+      }
     }
   }
 });
@@ -399,5 +566,5 @@ async function updateStatsVC(client: Client) {
   }
 }
 
-// Start web server for ticket logs
-startWebServer();
+// Start web server for ticket logs & OxaPay webhooks
+startWebServer(client);

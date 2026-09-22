@@ -10,7 +10,8 @@ import {
   TextChannel,
   OverwriteType,
 } from 'discord.js';
-import { stopPollingForChannel } from '../config';
+import { stopPollingForChannel, getSystemFeeLabel } from '../config';
+import { setupMiddlemanInitialMessage, removeMMSession } from './middleman';
 import * as discordTranscripts from 'discord-html-transcripts';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -18,6 +19,139 @@ import * as path from 'path';
 const logsDir = path.join(process.cwd(), 'logs');
 if (!fs.existsSync(logsDir)) {
   fs.mkdirSync(logsDir, { recursive: true });
+}
+
+/**
+ * 手数料案内用パネルを送信する
+ */
+export async function setupFeePanel(interaction: CommandInteraction) {
+  const member = interaction.member;
+  if (!member || !('roles' in member)) {
+    await interaction.reply({ content: 'サーバー内でのみ実行可能です。', ephemeral: true });
+    return;
+  }
+
+  const supportRoleId = process.env.SUPPORT_ROLE_ID;
+  let hasSupportRole = false;
+  if (supportRoleId) {
+    if (Array.isArray(member.roles)) {
+      hasSupportRole = member.roles.includes(supportRoleId);
+    } else {
+      hasSupportRole = member.roles.cache.has(supportRoleId);
+    }
+  }
+  const isAdministrator = typeof member.permissions !== 'string' && member.permissions.has(PermissionFlagsBits.Administrator);
+
+  if (!hasSupportRole && !isAdministrator) {
+    await interaction.reply({
+      content: 'このコマンドを実行する権限がありません。必要なロール（SUPPORT_ROLE_ID）または管理者権限が必要です。',
+      ephemeral: true
+    });
+    return;
+  }
+
+  await interaction.deferReply({ ephemeral: true });
+
+  const feeFiatToCrypto = getSystemFeeLabel('fiat_to_crypto');
+  const feeCryptoToCrypto = getSystemFeeLabel('crypto_to_crypto');
+  const feeCryptoToFiat = getSystemFeeLabel('crypto_to_fiat');
+
+  const embed = new EmbedBuilder()
+    .setTitle('💎 取引手数料')
+    .setDescription(`
+\`\`\`
+・日本円 ➔ 暗号通貨 (Fiat ➔ Crypto)   : ${feeFiatToCrypto}
+・暗号通貨 ➔ 暗号通貨 (Crypto ➔ Crypto) : ${feeCryptoToCrypto}
+・暗号通貨 ➔ 日本円 (Crypto ➔ Fiat)   : ${feeCryptoToFiat}
+\`\`\`
+> 🔹 **最低手数料**: $1.00
+> 🔹 **最低受取額**: 300 円〜
+> 🔹 **送金手数料**: 利用者様負担（受取額から自動控除）
+> 🔹 **レート換算**: 国際為替・市場レート連動（20分ごとに自動更新）
+`)
+    .setColor('#00ff99')
+    .setFooter({ text: 'Crypto Exchange Service • 24時間365日 自動稼働中' })
+    .setTimestamp();
+
+  const channel = interaction.channel;
+  if (!channel || !('send' in channel)) {
+    await interaction.editReply({ content: 'このチャンネルでは実行できません。' });
+    return;
+  }
+
+  await channel.send({ embeds: [embed] });
+  await interaction.editReply({ content: '取引手数料の案内パネルを設置しました！' });
+}
+
+/**
+ * 対応通貨・決済方法案内用パネルを送信する
+ */
+export async function setupPaymentMethodsPanel(interaction: CommandInteraction) {
+  const member = interaction.member;
+  if (!member || !('roles' in member)) {
+    await interaction.reply({ content: 'サーバー内でのみ実行可能です。', ephemeral: true });
+    return;
+  }
+
+  const supportRoleId = process.env.SUPPORT_ROLE_ID;
+  let hasSupportRole = false;
+  if (supportRoleId) {
+    if (Array.isArray(member.roles)) {
+      hasSupportRole = member.roles.includes(supportRoleId);
+    } else {
+      hasSupportRole = member.roles.cache.has(supportRoleId);
+    }
+  }
+  const isAdministrator = typeof member.permissions !== 'string' && member.permissions.has(PermissionFlagsBits.Administrator);
+
+  if (!hasSupportRole && !isAdministrator) {
+    await interaction.reply({
+      content: 'このコマンドを実行する権限がありません。必要なロール（SUPPORT_ROLE_ID）または管理者権限が必要です。',
+      ephemeral: true
+    });
+    return;
+  }
+
+  await interaction.deferReply({ ephemeral: true });
+
+  const embed = new EmbedBuilder()
+    .setTitle('💳 対応通貨・決済方法一覧')
+    .setDescription(`
+### 💴 Fiat (日本円)
+・<:paypay:1537466476557115604> **PayPay** (money, money lite問わず)
+・<:rakuten_pay:1537466505023856652> **楽天ペイ**
+
+**【支払のみ】**
+・<:amazon:1537466237980901387> **Amazon Gift Card** (日本円のみ, 時間がかかります)
+・<:kyash:1537466412233138187> **Kyash**
+・<:bank:1537466271250255882> **銀行振込** (匿名 楽天銀行)
+・<:Revolut:1537466530814628011> **Revolut**
+
+---
+
+### 🪙 Crypto (暗号資産)
+・<:btc:1537466300027117669> **BTC** (ビットコイン)
+・<:ltc:1537466451978485842> **LTC** (ライトコイン)
+・<:eth:1537466343845269545> **ETH** (イーサリアム)
+・<:sol:1537466553124134952> **SOL** (ソラナ)
+・<:xmr:1537466602952327259> **XMR** (モネロ)
+・<:dai:1537466322261381120> **DAI**
+・<:usdt:1537466577962664036> **USDT** (Tether)
+
+> 📌 支払いには全てのUSDTを使用できますが、受け取りは **ETH Network USDT** のみです
+`)
+    .setColor('#00ff99')
+    .setFooter({ text: 'Crypto Exchange Service • 24時間365日 自動稼働中' })
+    .setTimestamp();
+
+  const channel = interaction.channel;
+  if (!channel || !('send' in channel)) {
+    await interaction.editReply({ content: 'このチャンネルでは実行できません。' });
+    return;
+  }
+
+  await channel.send({ embeds: [embed] });
+  await interaction.editReply({ content: '決済方法・対応通貨パネルを設置しました！' });
 }
 
 /**
@@ -101,6 +235,29 @@ export async function createTicketChannel(interaction: ButtonInteraction) {
   if (!guild) {
     await interaction.reply({ content: 'サーバー内でのみ実行可能です。', ephemeral: true });
     return;
+  }
+
+  // 「取引仲介(mm)」ボタンの場合はスタッフ（サポートロールまたは管理者）のみ作成可能
+  if (interaction.customId === 'create_ticket_middleman') {
+    const member = interaction.member;
+    const supportRoleId = process.env.SUPPORT_ROLE_ID;
+    let hasSupportRole = false;
+    if (member && 'roles' in member && supportRoleId) {
+      if (Array.isArray(member.roles)) {
+        hasSupportRole = member.roles.includes(supportRoleId);
+      } else {
+        hasSupportRole = member.roles.cache.has(supportRoleId);
+      }
+    }
+    const isAdministrator = member && typeof member.permissions !== 'string' && member.permissions.has(PermissionFlagsBits.Administrator);
+
+    if (!hasSupportRole && !isAdministrator) {
+      await interaction.reply({
+        content: '⚠️ 現在、取引仲介（mm）チケットの作成はサポートスタッフ限定となっております。取引仲介をご希望の場合はスタッフへお申し付けください。',
+        ephemeral: true,
+      });
+      return;
+    }
   }
 
   await interaction.deferReply({ ephemeral: true });
@@ -234,6 +391,14 @@ export async function createTicketChannel(interaction: ButtonInteraction) {
 
       embeds.push(embedInfo, embedType);
       components.push(rowType, rowClose);
+
+      await ticketChannel.send({
+        content: `${member} さん、こちらのチャンネルで要件を教えてください。`,
+        embeds: embeds,
+        components: components,
+      });
+    } else if (ticketType === 'mm') {
+      await setupMiddlemanInitialMessage(ticketChannel as TextChannel, member.id);
     } else {
       const embed = new EmbedBuilder()
         .setTitle(`${displayType} チケットが作成されました`)
@@ -254,13 +419,13 @@ export async function createTicketChannel(interaction: ButtonInteraction) {
 
       embeds.push(embed);
       components.push(rowClose);
-    }
 
-    await ticketChannel.send({
-      content: `${member} さん、こちらのチャンネルで要件を教えてください。`,
-      embeds: embeds,
-      components: components,
-    });
+      await ticketChannel.send({
+        content: `${member} さん、こちらのチャンネルで要件を教えてください。`,
+        embeds: embeds,
+        components: components,
+      });
+    }
 
     await interaction.editReply({
       content: `チケットを作成しました: ${ticketChannel}`,
@@ -324,6 +489,7 @@ export async function handleConfirmCloseTicket(interaction: ButtonInteraction) {
   if (!channel || channel.type !== ChannelType.GuildText) return;
 
   stopPollingForChannel(channel.id);
+  removeMMSession(channel.id);
 
   await interaction.reply({
     content: 'チケットを閉じます。このチャンネルは5秒後に削除されます。',

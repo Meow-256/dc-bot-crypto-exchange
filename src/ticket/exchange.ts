@@ -30,6 +30,94 @@ import {
 } from '../config';
 import { requestOxaPay } from '../oxapay';
 
+export interface ParsedAmountResult {
+  unit: 'JPY' | 'USD' | 'CRYPTO';
+  symbol?: string;
+  amount: number;
+  displayText: string;
+}
+
+/**
+ * ユーザーが入力した金額文字列（例: "10000", "10000円", "100$", "$100", "0.05 BTC", "100 USDT" 等）を柔軟にパースする
+ */
+export function parseUserInputAmount(rawInput: string, activeSymbol: string): ParsedAmountResult | null {
+  if (!rawInput || typeof rawInput !== 'string') return null;
+
+  // 全角英数・記号を半角に変換、カンマ除去
+  let cleaned = rawInput
+    .replace(/[！-～]/g, (s) => String.fromCharCode(s.charCodeAt(0) - 0xFEE0))
+    .replace(/　/g, ' ')
+    .replace(/,/g, '')
+    .trim();
+
+  if (!cleaned) return null;
+
+  // 1. USD (ドル) 判定: $100, 100$, 100 USD, 100usd, 100ドル
+  const usdPrefixMatch = cleaned.match(/^\$\s*([0-9]+(?:\.[0-9]+)?)$/i);
+  const usdSuffixMatch = cleaned.match(/^([0-9]+(?:\.[0-9]+)?)\s*(?:\$|usd|dollar|ドル)$/i);
+  if (usdPrefixMatch) {
+    const num = parseFloat(usdPrefixMatch[1]);
+    if (!isNaN(num) && num > 0) {
+      return { unit: 'USD', amount: num, displayText: `$${num.toLocaleString('en-US', { maximumFractionDigits: 4 })}` };
+    }
+  }
+  if (usdSuffixMatch) {
+    const num = parseFloat(usdSuffixMatch[1]);
+    if (!isNaN(num) && num > 0) {
+      return { unit: 'USD', amount: num, displayText: `$${num.toLocaleString('en-US', { maximumFractionDigits: 4 })}` };
+    }
+  }
+
+  // 2. JPY (日本円) 判定: ¥10000, 10000円, 10000 JPY, 10000jpy, 10000yen
+  const jpyPrefixMatch = cleaned.match(/^[¥￥]\s*([0-9]+(?:\.[0-9]+)?)$/i);
+  const jpySuffixMatch = cleaned.match(/^([0-9]+(?:\.[0-9]+)?)\s*(?:円|jpy|yen)$/i);
+  if (jpyPrefixMatch) {
+    const num = parseFloat(jpyPrefixMatch[1]);
+    if (!isNaN(num) && num > 0) {
+      return { unit: 'JPY', amount: num, displayText: `${Math.round(num).toLocaleString()} 円` };
+    }
+  }
+  if (jpySuffixMatch) {
+    const num = parseFloat(jpySuffixMatch[1]);
+    if (!isNaN(num) && num > 0) {
+      return { unit: 'JPY', amount: num, displayText: `${Math.round(num).toLocaleString()} 円` };
+    }
+  }
+
+  // 3. 暗号通貨シンボル判定: 0.05 BTC, 100 USDT, 1.5 SOL, 2 LTC, 0.5 ETH, 100 DAI, 0.8 XMR
+  const knownCryptos = ['BTC', 'ETH', 'LTC', 'SOL', 'XMR', 'USDT', 'DAI', 'TETHER'];
+  const cryptoMatch = cleaned.match(/^([0-9]+(?:\.[0-9]+)?)\s*([a-zA-Z]+)$/);
+  if (cryptoMatch) {
+    const num = parseFloat(cryptoMatch[1]);
+    let sym = cryptoMatch[2].toUpperCase();
+    if (sym === 'TETHER') sym = 'USDT';
+
+    if (knownCryptos.includes(sym) && !isNaN(num) && num > 0) {
+      return { unit: 'CRYPTO', symbol: sym, amount: num, displayText: `${num} ${sym}` };
+    }
+  }
+
+  // 4. 数値単体 (プレフィックス/サフィックスなし)
+  const plainNumMatch = cleaned.match(/^([0-9]+(?:\.[0-9]+)?)$/);
+  if (plainNumMatch) {
+    const num = parseFloat(plainNumMatch[1]);
+    if (!isNaN(num) && num > 0) {
+      let upperActive = activeSymbol.toUpperCase();
+      if (upperActive === 'TETHER') upperActive = 'USDT';
+
+      // 対象通貨が暗号通貨で、1未満の小数（例: 0.05, 0.001）が入力された場合は暗号通貨数量として解釈
+      if (knownCryptos.includes(upperActive) && (num < 1 || (num < 10 && upperActive === 'BTC'))) {
+        return { unit: 'CRYPTO', symbol: upperActive, amount: num, displayText: `${num} ${upperActive}` };
+      }
+
+      // 通常の数値（例: 10000, 5000）は日本円として解釈
+      return { unit: 'JPY', amount: num, displayText: `${Math.round(num).toLocaleString()} 円` };
+    }
+  }
+
+  return null;
+}
+
 export interface ExchangeQuoteResult {
   exchangeType: 'crypto_to_crypto' | 'crypto_to_fiat' | 'fiat_to_crypto';
   paySymbol: string;
@@ -503,12 +591,12 @@ export async function handleExchangeSelect(interaction: StringSelectMenuInteract
 
       const payAmountButton = new ButtonBuilder()
         .setCustomId(`input_crypto_amount:pay:${exchangeType}`)
-        .setLabel('💵 支払う額（日本円）を指定')
+        .setLabel('💵 支払う額を指定 (円 / $ / 通貨数量)')
         .setStyle(ButtonStyle.Primary);
 
       const takeAmountButton = new ButtonBuilder()
         .setCustomId(`input_crypto_amount:take:${exchangeType}`)
-        .setLabel('📥 受け取りたい額（日本円）を指定')
+        .setLabel('📥 受け取りたい額を指定 (円 / $ / 通貨数量)')
         .setStyle(ButtonStyle.Success);
 
       const closeButton = new ButtonBuilder()
@@ -625,12 +713,12 @@ export async function handleResetAmountChoice(interaction: ButtonInteraction) {
 
   const payAmountButton = new ButtonBuilder()
     .setCustomId(`input_crypto_amount:pay:${exchangeType}`)
-    .setLabel('💵 支払う額（日本円）を指定')
+    .setLabel('💵 支払う額を指定 (円 / $ / 通貨数量)')
     .setStyle(ButtonStyle.Primary);
 
   const takeAmountButton = new ButtonBuilder()
     .setCustomId(`input_crypto_amount:take:${exchangeType}`)
-    .setLabel('📥 受け取りたい額（日本円）を指定')
+    .setLabel('📥 受け取りたい額を指定 (円 / $ / 通貨数量)')
     .setStyle(ButtonStyle.Success);
 
   const closeButton = new ButtonBuilder()
@@ -648,7 +736,7 @@ export async function handleResetAmountChoice(interaction: ButtonInteraction) {
 }
 
 /**
- * 日本円金額入力ダイアログ (Modal) を表示する
+ * 金額入力ダイアログ (Modal) を表示する（日本円・米ドル・暗号資産数量に対応）
  */
 export async function showCryptoAmountModal(interaction: ButtonInteraction) {
   const customId = interaction.customId;
@@ -664,13 +752,13 @@ export async function showCryptoAmountModal(interaction: ButtonInteraction) {
 
   const payOption = exchangeOptions.find(opt => opt.label === payCurrencyLabel);
   const paySymbol = payOption ? payOption.value : getCryptoSymbolFromLabel(payCurrencyLabel);
-  
+
   const takeOption = exchangeOptions.find(opt => opt.label === takeCurrencyLabel);
   const takeSymbol = takeOption ? takeOption.value : getCryptoSymbolFromLabel(takeCurrencyLabel);
 
   const isPayMode = mode === 'pay';
-  const modalTitle = isPayMode ? '支払う金額（日本円）の入力' : '受け取りたい金額（日本円）の入力';
-  const inputLabel = isPayMode ? '支払う金額 (日本円で入力してください)' : '受け取りたい金額 (日本円で入力してください)';
+  const modalTitle = isPayMode ? '支払う金額の入力' : '受け取りたい金額の入力';
+  const inputLabel = isPayMode ? '支払う金額 (例: 10000, 100$, 0.05 BTC)' : '受け取りたい金額 (例: 10000, 100$, 0.05 BTC)';
 
   const modal = new ModalBuilder()
     .setCustomId(`crypto_amount_modal_submit:${mode}:${paySymbol}:${takeSymbol}`)
@@ -679,7 +767,7 @@ export async function showCryptoAmountModal(interaction: ButtonInteraction) {
   const amountInput = new TextInputBuilder()
     .setCustomId('crypto_jpy_amount')
     .setLabel(inputLabel)
-    .setPlaceholder('例: 10000')
+    .setPlaceholder('例: 10000 (円) / 100$ (USD) / 0.05 BTC')
     .setStyle(TextInputStyle.Short)
     .setRequired(true);
 
@@ -690,7 +778,7 @@ export async function showCryptoAmountModal(interaction: ButtonInteraction) {
 }
 
 /**
- * 日本円金額 Modal 送信時の処理 (見積もり計算と提示)
+ * 金額 Modal 送信時の処理 (柔軟な金額解析・見積もり計算と提示)
  */
 export async function handleAmountModalSubmit(interaction: ModalSubmitInteraction) {
   const customId = interaction.customId;
@@ -701,20 +789,45 @@ export async function handleAmountModalSubmit(interaction: ModalSubmitInteractio
   let takeSymbol = parts[3];
   if (takeSymbol.toUpperCase() === 'TETHER') takeSymbol = 'USDT';
 
-  const jpyAmountStr = interaction.fields.getTextInputValue('crypto_jpy_amount');
-  const jpyAmount = parseFloat(jpyAmountStr);
+  const rawAmountStr = interaction.fields.getTextInputValue('crypto_jpy_amount');
+  const activeSymbol = mode === 'pay' ? paySymbol : takeSymbol;
+  const parsed = parseUserInputAmount(rawAmountStr, activeSymbol);
 
-  if (isNaN(jpyAmount) || jpyAmount <= 0) {
-    await interaction.reply({ content: '無効な金額が入力されました。数値で入力してください。', ephemeral: true });
+  if (!parsed || isNaN(parsed.amount) || parsed.amount <= 0) {
+    await interaction.reply({
+      content: '⚠️ 有効な金額が入力されませんでした。\n例: `10000`（日本円）、`100$`（米ドル）、`0.05 BTC`（暗号資産数量）などの形式で入力してください。',
+      ephemeral: true
+    });
     return;
   }
 
   await interaction.deferReply();
 
   try {
+    const merchantKey = process.env.OXAPAY_MERCHANT_KEY;
+    const usdJpyRate = currentUsdJpyRate;
+    let jpyAmount = 0;
+
+    if (parsed.unit === 'JPY') {
+      jpyAmount = parsed.amount;
+    } else if (parsed.unit === 'USD') {
+      jpyAmount = parsed.amount * usdJpyRate;
+    } else if (parsed.unit === 'CRYPTO') {
+      const cryptoSymbol = (parsed.symbol || activeSymbol).toUpperCase();
+      const pricesResponse = await requestOxaPay('GET', '/common/prices', null, merchantKey || '');
+      const prices = pricesResponse.data || {};
+      const coinPrice = prices[cryptoSymbol] || prices[cryptoSymbol.toLowerCase()];
+      if (!coinPrice || coinPrice <= 0) {
+        throw new Error(`${cryptoSymbol} の最新価格を取得できませんでした。`);
+      }
+      const usdValue = parsed.amount * coinPrice;
+      jpyAmount = usdValue * usdJpyRate;
+    }
+
     const quote = await calculateExchangeQuote(paySymbol, takeSymbol, jpyAmount, mode);
     const embedInfo = interaction.message?.embeds[0];
     const specifiedModeLabel = mode === 'pay' ? '（支払う額を指定）' : '（受け取りたい額を指定）';
+    const inputNotice = `\n📌 **ご指定の金額:** \`${parsed.displayText}\``;
 
     if (quote.exchangeType === 'crypto_to_fiat') {
       const takeOption = fiatTakeOptions.find(opt => opt.value === takeSymbol);
@@ -722,7 +835,7 @@ export async function handleAmountModalSubmit(interaction: ModalSubmitInteractio
 
       const embedForm = new EmbedBuilder()
         .setTitle(`📊 交換のお見積もり内容 ${specifiedModeLabel}`)
-        .setDescription(`暗号通貨（${formatWithEmoji(quote.paySymbol)}）から日本円（${formatWithEmoji(takeLabel)}）へのお見積もりです。\n内容に間違いがなければ、下のボタンを押してお支払いリンクを発行してください。`)
+        .setDescription(`暗号通貨（${formatWithEmoji(quote.paySymbol)}）から日本円（${formatWithEmoji(takeLabel)}）へのお見積もりです。${inputNotice}\n内容に間違いがなければ、下のボタンを押してお支払いリンクを発行してください。`)
         .addFields(
           {
             name: '📤 支払う額',
@@ -782,7 +895,7 @@ export async function handleAmountModalSubmit(interaction: ModalSubmitInteractio
 
       const embedForm = new EmbedBuilder()
         .setTitle(`📊 交換のお見積もり内容 ${specifiedModeLabel}`)
-        .setDescription('システム手数料、および送金手数料（ブロックチェーン手数料）を考慮した見積もりです。\n内容に間違いがなければ、下のボタンを押して「送金先アドレス」を入力してください。')
+        .setDescription(`システム手数料、および送金手数料（ブロックチェーン手数料）を考慮した見積もりです。${inputNotice}\n内容に間違いがなければ、下のボタンを押して「送金先アドレス」を入力してください。`)
         .addFields(
           {
             name: '📤 支払う額',
@@ -839,7 +952,7 @@ export async function handleAmountModalSubmit(interaction: ModalSubmitInteractio
     // Crypto To Crypto
     const embedForm = new EmbedBuilder()
       .setTitle(`📊 交換のお見積もり内容 ${specifiedModeLabel}`)
-      .setDescription('スワップ手数料、システム手数料、および送金手数料（ブロックチェーン手数料）を考慮した見積もりです。\n内容に間違いがなければ、下のボタンを押して「送金先アドレス」を入力してください。')
+      .setDescription(`スワップ手数料、システム手数料、および送金手数料（ブロックチェーン手数料）を考慮した見積もりです。${inputNotice}\n内容に間違いがなければ、下のボタンを押して「送金先アドレス」を入力してください。`)
       .addFields(
         {
           name: '📤 支払う額',
@@ -920,6 +1033,7 @@ export async function handleProceedFiatInvoiceSubmit(interaction: ButtonInteract
   }
 
   try {
+    const webUrl = process.env.WEB_URL;
     const invoiceData: any = {
       amount: usdAmount,
       currency: 'USD',
@@ -928,6 +1042,11 @@ export async function handleProceedFiatInvoiceSubmit(interaction: ButtonInteract
       order_id: interaction.channelId,
       description: `Exchange Crypto to Fiat: ${paySymbol} to ${takeSymbol}`
     };
+
+    if (webUrl) {
+      invoiceData.callback_url = `${webUrl}/api/oxapay/webhook`;
+      invoiceData.callbackUrl = `${webUrl}/api/oxapay/webhook`;
+    }
 
     if (paySymbol) {
       invoiceData.pay_currency = paySymbol;
@@ -964,7 +1083,7 @@ export async function handleProceedFiatInvoiceSubmit(interaction: ButtonInteract
       const embedInfo = interaction.message?.embeds[0];
       const embedForm = new EmbedBuilder()
         .setTitle('お支払いリンクが発行されました')
-        .setDescription(`以下のボタンから支払い画面を開き、お支払いを行ってください。\nお支払いが確認され次第、スタッフが **${takeLabel}（ポチ袋/送金リンク）** をこのチャンネル内に送信します。`)
+        .setDescription(`以下のボタンから支払い画面を開き、お支払いを行ってください。\n**お支払いが完了すると自動的に検知され**、スタッフが **${takeLabel}（ポチ袋/送金リンク）** の手配を開始します。`)
         .addFields(
           {
             name: '📤 支払う額',
@@ -990,19 +1109,13 @@ export async function handleProceedFiatInvoiceSubmit(interaction: ButtonInteract
         .setURL(payLink)
         .setStyle(ButtonStyle.Link);
 
-      const checkButton = new ButtonBuilder()
-        .setCustomId(`check_fiat_payment:${trackId}`)
-      .setLabel('支払い完了')
-      .setStyle(ButtonStyle.Success)
-      .setEmoji('✅');
+      const closeButton = new ButtonBuilder()
+        .setCustomId('close_ticket')
+        .setLabel('チケットを閉じる')
+        .setStyle(ButtonStyle.Danger)
+        .setEmoji('🔒');
 
-    const closeButton = new ButtonBuilder()
-      .setCustomId('close_ticket')
-      .setLabel('チケットを閉じる')
-      .setStyle(ButtonStyle.Danger)
-      .setEmoji('🔒');
-
-    const rowAction = new ActionRowBuilder<ButtonBuilder>().addComponents(payButton, checkButton, closeButton);
+      const rowAction = new ActionRowBuilder<ButtonBuilder>().addComponents(payButton, closeButton);
 
     if (interaction.message) {
       await interaction.message.edit({
@@ -1182,6 +1295,7 @@ export async function handleAddressModalSubmit(interaction: ModalSubmitInteracti
       return;
     }
 
+    const webUrl = process.env.WEB_URL;
     const invoiceData: any = {
       amount: usdAmount,
       currency: 'USD',
@@ -1190,6 +1304,11 @@ export async function handleAddressModalSubmit(interaction: ModalSubmitInteracti
       order_id: interaction.channelId,
       description: `Exchange Crypto: ${paySymbol} to ${takeSymbol}`
     };
+
+    if (webUrl) {
+      invoiceData.callback_url = `${webUrl}/api/oxapay/webhook`;
+      invoiceData.callbackUrl = `${webUrl}/api/oxapay/webhook`;
+    }
 
     if (paySymbol) {
       invoiceData.pay_currency = paySymbol;
@@ -1239,7 +1358,7 @@ export async function handleAddressModalSubmit(interaction: ModalSubmitInteracti
     const embedInfo = interaction.message?.embeds[0];
     const embedForm = new EmbedBuilder()
       .setTitle('お支払いリンクが発行されました')
-      .setDescription(`以下のボタンから支払い画面を開き、お支払いを行ってください。\nお支払い完了後、**【支払い完了】**ボタンを押すと自動的に ${takeSymbol} へ両替・送金処理が実行されます（お支払いがまだの場合は1分ごとに自動監視します）。`)
+      .setDescription(`以下のボタンから支払い画面を開き、お支払いを行ってください。\n**お支払いが完了すると、ブロックチェーンの承認後、自動的に ${takeSymbol} への両替・送金処理が実行されます。**`)
       .addFields(
         {
           name: '📤 支払う額',
@@ -1270,19 +1389,13 @@ export async function handleAddressModalSubmit(interaction: ModalSubmitInteracti
       .setURL(payLink)
       .setStyle(ButtonStyle.Link);
 
-    const checkButton = new ButtonBuilder()
-      .setCustomId(`check_payment:${trackId}`)
-      .setLabel('支払い完了')
-      .setStyle(ButtonStyle.Success)
-      .setEmoji('✅');
-
     const closeButton = new ButtonBuilder()
       .setCustomId('close_ticket')
       .setLabel('チケットを閉じる')
       .setStyle(ButtonStyle.Danger)
       .setEmoji('🔒');
 
-    const rowAction = new ActionRowBuilder<ButtonBuilder>().addComponents(payButton, checkButton, closeButton);
+    const rowAction = new ActionRowBuilder<ButtonBuilder>().addComponents(payButton, closeButton);
 
     if (interaction.message) {
       await interaction.message.edit({
@@ -1478,6 +1591,7 @@ export async function refreshTicketChannel(
       }
 
       // B: Crypto to Fiat または Crypto to Crypto (OxaPay Invoice再発行)
+      const webUrl = process.env.WEB_URL;
       const invoiceData: any = {
         amount: quote.usdAmount,
         currency: 'USD',
@@ -1486,6 +1600,12 @@ export async function refreshTicketChannel(
         order_id: channel.id,
         description: `Exchange ${quote.exchangeType}: ${quote.paySymbol} to ${quote.takeSymbol}`
       };
+
+      if (webUrl) {
+        invoiceData.callback_url = `${webUrl}/api/oxapay/webhook`;
+        invoiceData.callbackUrl = `${webUrl}/api/oxapay/webhook`;
+      }
+
       if (quote.paySymbol) {
         invoiceData.pay_currency = quote.paySymbol;
       }
@@ -1548,19 +1668,13 @@ export async function refreshTicketChannel(
           .setURL(payLink)
           .setStyle(ButtonStyle.Link);
 
-        const checkButton = new ButtonBuilder()
-          .setCustomId(`check_fiat_payment:${newTrackId}`)
-          .setLabel('支払い完了')
-          .setStyle(ButtonStyle.Success)
-          .setEmoji('✅');
-
         const closeButton = new ButtonBuilder()
           .setCustomId('close_ticket')
           .setLabel('チケットを閉じる')
           .setStyle(ButtonStyle.Danger)
           .setEmoji('🔒');
 
-        const rowAction = new ActionRowBuilder<ButtonBuilder>().addComponents(payButton, checkButton, closeButton);
+        const rowAction = new ActionRowBuilder<ButtonBuilder>().addComponents(payButton, closeButton);
 
         await targetPaymentDataMsg.edit({
           embeds: [embedInfo, embedForm],
@@ -1584,7 +1698,7 @@ export async function refreshTicketChannel(
 
         const embedForm = new EmbedBuilder()
           .setTitle('お支払いリンクが発行されました')
-          .setDescription(`以下のボタンから支払い画面を開き、お支払いを行ってください。\nお支払い完了後、**【支払い完了】**ボタンを押すと自動的に ${quote.takeSymbol} へ両替・送金処理が実行されます（お支払いがまだの場合は1分ごとに自動監視します）。`)
+          .setDescription(`以下のボタンから支払い画面を開き、お支払いを行ってください。\n**お支払いが完了すると、ブロックチェーンの承認後、自動的に ${quote.takeSymbol} への両替・送金処理が実行されます。**`)
           .addFields(
             {
               name: '📤 支払う額',
@@ -1615,19 +1729,13 @@ export async function refreshTicketChannel(
           .setURL(payLink)
           .setStyle(ButtonStyle.Link);
 
-        const checkButton = new ButtonBuilder()
-          .setCustomId(`check_payment:${newTrackId}`)
-          .setLabel('支払い完了')
-          .setStyle(ButtonStyle.Success)
-          .setEmoji('✅');
-
         const closeButton = new ButtonBuilder()
           .setCustomId('close_ticket')
           .setLabel('チケットを閉じる')
           .setStyle(ButtonStyle.Danger)
           .setEmoji('🔒');
 
-        const rowAction = new ActionRowBuilder<ButtonBuilder>().addComponents(payButton, checkButton, closeButton);
+        const rowAction = new ActionRowBuilder<ButtonBuilder>().addComponents(payButton, closeButton);
 
         await targetPaymentDataMsg.edit({
           embeds: [embedInfo, embedForm],

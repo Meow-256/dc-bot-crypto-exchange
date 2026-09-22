@@ -90,29 +90,29 @@ export function stopPollingForChannel(channelId: string) {
 
 // Fiat (日本円 - 支払用：すべて)
 export const fiatGiveOptions = [
-  { label: 'Paypay', value: 'paypay', emoji: { id: '1537463421941846026', name: 'paypay' } },
-  { label: '楽天pay', value: 'rakuten_pay', emoji: { id: '1537463450928677014', name: 'rakuten_pay' } },
-  { label: 'Amazon Gift Card (日本円のみ)', value: 'amazon_gift', emoji: { id: '1537463344112472254', name: 'amazon' } },
-  { label: 'Kyash', value: 'kyash', emoji: { id: '1537463393458327632', name: 'kyash' } },
-  { label: '銀行振込 (匿名 楽天銀行)', value: 'bank', emoji: { id: '1537463368091308032', name: 'bank' } },
-  { label: 'Revolut', value: 'revolut', emoji: { id: '1537463518666694806', name: 'Revolut' } },
+  { label: 'Paypay', value: 'paypay', emoji: { id: '1537466476557115604', name: 'paypay' } },
+  { label: '楽天pay', value: 'rakuten_pay', emoji: { id: '1537466505023856652', name: 'rakuten_pay' } },
+  { label: 'Amazon Gift Card (日本円のみ)', value: 'amazon_gift', emoji: { id: '1537466237980901387', name: 'amazon' } },
+  { label: 'Kyash', value: 'kyash', emoji: { id: '1537466412233138187', name: 'kyash' } },
+  { label: '銀行振込 (匿名 楽天銀行)', value: 'bank', emoji: { id: '1537466271250255882', name: 'bank' } },
+  { label: 'Revolut', value: 'revolut', emoji: { id: '1537466530814628011', name: 'Revolut' } },
 ];
 
 // Fiat (日本円 - 受取用：支払のみの項目を除外)
 export const fiatTakeOptions = [
-  { label: 'Paypay', value: 'paypay', emoji: { id: '1537463421941846026', name: 'paypay' } },
-  { label: '楽天pay', value: 'rakuten_pay', emoji: { id: '1537463450928677014', name: 'rakuten_pay' } },
+  { label: 'Paypay', value: 'paypay', emoji: { id: '1537466476557115604', name: 'paypay' } },
+  { label: '楽天pay', value: 'rakuten_pay', emoji: { id: '1537466505023856652', name: 'rakuten_pay' } },
 ];
 
 // Crypto (暗号通貨) の選択肢一覧 (Tronを削除)
 export const cryptoOptions = [
-  { label: 'BTC (bitcoin:ビットコイン)', value: 'btc', emoji: { id: '1537464635840528555', name: 'btc' } },
-  { label: 'LTC (litecoin:ライトコイン)', value: 'ltc', emoji: { id: '1537465492338516128', name: 'ltc' } },
-  { label: 'ETH (etherium:イーサリアム)', value: 'eth', emoji: { id: '1537464838790455437', name: 'eth' } },
-  { label: 'SOL (solana:ソラナ)', value: 'sol', emoji: { id: '1537464642329378936', name: 'sol' } },
-  { label: 'XMR (monero:モネロ)', value: 'xmr', emoji: { id: '1537464645982355506', name: 'xmr' } },
-  { label: 'Tether (Tether USD)', value: 'usdt', emoji: { id: '1537464644069892147', name: 'usdt' } },
-  { label: 'DAI', value: 'dai', emoji: { id: '1537464637350617208', name: 'dai' } },
+  { label: 'BTC (bitcoin:ビットコイン)', value: 'btc', emoji: { id: '1537466300027117669', name: 'btc' } },
+  { label: 'LTC (litecoin:ライトコイン)', value: 'ltc', emoji: { id: '1537466451978485842', name: 'ltc' } },
+  { label: 'ETH (etherium:イーサリアム)', value: 'eth', emoji: { id: '1537466343845269545', name: 'eth' } },
+  { label: 'SOL (solana:ソラナ)', value: 'sol', emoji: { id: '1537466553124134952', name: 'sol' } },
+  { label: 'XMR (monero:モネロ)', value: 'xmr', emoji: { id: '1537466602952327259', name: 'xmr' } },
+  { label: 'Tether (Tether USD)', value: 'usdt', emoji: { id: '1537466577962664036', name: 'usdt' } },
+  { label: 'DAI', value: 'dai', emoji: { id: '1537466322261381120', name: 'dai' } },
 ];
 
 // 共通オプション（マージ、検索用）
