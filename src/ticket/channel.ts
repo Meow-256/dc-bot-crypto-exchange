@@ -8,8 +8,17 @@ import {
   CommandInteraction,
   ButtonInteraction,
   TextChannel,
+  OverwriteType,
 } from 'discord.js';
 import { stopPollingForChannel } from '../config';
+import * as discordTranscripts from 'discord-html-transcripts';
+import * as fs from 'fs';
+import * as path from 'path';
+
+const logsDir = path.join(process.cwd(), 'logs');
+if (!fs.existsSync(logsDir)) {
+  fs.mkdirSync(logsDir, { recursive: true });
+}
 
 /**
  * チケット作成用パネルを送信する
@@ -322,9 +331,39 @@ export async function handleConfirmCloseTicket(interaction: ButtonInteraction) {
 
   setTimeout(async () => {
     try {
+      const html = await discordTranscripts.createTranscript(channel, {
+        limit: -1,
+        returnType: discordTranscripts.ExportReturnType.String,
+        saveImages: true,
+      });
+      const fileName = `${channel.name}-${Date.now()}.html`;
+      fs.writeFileSync(path.join(logsDir, fileName), html as unknown as string);
+      
+      try {
+        const webUrl = process.env.WEB_URL || 'http://localhost:3000';
+        const logUrl = `${webUrl}/logs/${fileName}`;
+        const ownerOverwrite = channel.permissionOverwrites.cache.find(
+          (overwrite) => overwrite.type === OverwriteType.Member && overwrite.id !== channel.client.user.id
+        );
+        if (ownerOverwrite) {
+          const owner = await channel.client.users.fetch(ownerOverwrite.id);
+          if (owner) {
+            const embed = new EmbedBuilder()
+              .setTitle('チケットがクローズされました')
+              .setDescription(`チケット \`${channel.name}\` の対応が完了しました。\n以下のリンクからチケットのログ（履歴）を確認できます。`)
+              .addFields({ name: '🔗 ログリンク', value: `[ログを見る](${logUrl})` })
+              .setColor('#0099ff')
+              .setTimestamp();
+            await owner.send({ embeds: [embed] }).catch(() => console.log(`Failed to DM ${owner.tag}`));
+          }
+        }
+      } catch (err) {
+        console.error('Failed to send DM:', err);
+      }
+      
       await channel.delete('Ticket closed by user confirm.');
     } catch (error) {
-      console.error('Failed to delete ticket channel:', error);
+      console.error('Failed to save log or delete ticket channel:', error);
     }
   }, 5000);
 }
@@ -391,9 +430,39 @@ export async function handleForceCloseCommand(interaction: CommandInteraction) {
 
   setTimeout(async () => {
     try {
+      const html = await discordTranscripts.createTranscript(channel, {
+        limit: -1,
+        returnType: discordTranscripts.ExportReturnType.String,
+        saveImages: true,
+      });
+      const fileName = `${channel.name}-${Date.now()}.html`;
+      fs.writeFileSync(path.join(logsDir, fileName), html as unknown as string);
+
+      try {
+        const webUrl = process.env.WEB_URL || 'http://localhost:3000';
+        const logUrl = `${webUrl}/logs/${fileName}`;
+        const ownerOverwrite = channel.permissionOverwrites.cache.find(
+          (overwrite) => overwrite.type === OverwriteType.Member && overwrite.id !== channel.client.user.id
+        );
+        if (ownerOverwrite) {
+          const owner = await channel.client.users.fetch(ownerOverwrite.id);
+          if (owner) {
+            const embed = new EmbedBuilder()
+              .setTitle('チケットが強制クローズされました')
+              .setDescription(`サポートスタッフによりチケット \`${channel.name}\` がクローズされました。\n以下のリンクからチケットのログ（履歴）を確認できます。`)
+              .addFields({ name: '🔗 ログリンク', value: `[ログを見る](${logUrl})` })
+              .setColor('#ff3300')
+              .setTimestamp();
+            await owner.send({ embeds: [embed] }).catch(() => console.log(`Failed to DM ${owner.tag}`));
+          }
+        }
+      } catch (err) {
+        console.error('Failed to send DM:', err);
+      }
+
       await channel.delete('Ticket closed by support staff via /close command.');
     } catch (error) {
-      console.error('Failed to delete ticket channel:', error);
+      console.error('Failed to save log or delete ticket channel:', error);
     }
   }, 5000);
 }

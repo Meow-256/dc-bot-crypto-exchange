@@ -15,11 +15,14 @@ import {
   currentUsdJpyRate,
   getSystemFeeRate,
   fiatTakeOptions,
+  fiatGiveOptions,
   exchangeOptions,
   getExchangeTypeLabel,
   getFilteredOptions,
   getCryptoSymbolFromLabel,
-  isValidCryptoAddress
+  isValidCryptoAddress,
+  formatWithEmoji,
+  getEmojiPrefix
 } from '../config';
 import { requestOxaPay } from '../oxapay';
 
@@ -86,7 +89,11 @@ export async function handleExchangeSelect(interaction: StringSelectMenuInteract
   
   const selectedValue = interaction.values[0];
   const selectedOption = exchangeOptions.find(opt => opt.value === selectedValue);
-  const selectedLabel = selectedOption ? selectedOption.label : selectedValue;
+  let selectedLabel = selectedOption ? selectedOption.label : selectedValue;
+  if (selectedOption && (selectedOption as any).emoji) {
+    const emoji = (selectedOption as any).emoji;
+    selectedLabel = `<:${emoji.name}:${emoji.id}> ${selectedLabel}`;
+  }
 
   const fields = embedForm.data.fields || [];
   if (fields.length >= 3) {
@@ -99,14 +106,14 @@ export async function handleExchangeSelect(interaction: StringSelectMenuInteract
 
   embedForm.setFields(fields);
 
-  const giveVal = fields[1] ? fields[1].value : '未選択';
-  const takeVal = fields[2] ? fields[2].value : '未選択';
+  const giveVal = fields[1] ? fields[1].value.replace(/<:[^:]+:\d+>\s*/, '') : '未選択';
+  const takeVal = fields[2] ? fields[2].value.replace(/<:[^:]+:\d+>\s*/, '') : '未選択';
 
   const isGiveSelected = giveVal !== '未選択';
   const isTakeSelected = takeVal !== '未選択';
 
   if (isGiveSelected && isTakeSelected) {
-    if (exchangeType === 'crypto_to_crypto' || exchangeType === 'crypto_to_fiat') {
+    if (exchangeType === 'crypto_to_crypto' || exchangeType === 'crypto_to_fiat' || exchangeType === 'fiat_to_crypto') {
       embedForm.setDescription(`${interaction.user} 様、交換内容の選択が完了しました。\n次に、基準とする金額の指定方法（**【支払う額】** または **【受け取りたい額】**）を選択してください。`);
 
       const payAmountButton = new ButtonBuilder()
@@ -169,12 +176,14 @@ export async function handleExchangeSelect(interaction: StringSelectMenuInteract
     const giveOptions = giveSourceOptions.map(opt => ({
       label: opt.label,
       value: opt.value,
+      emoji: (opt as any).emoji,
       default: opt.label === giveVal,
     }));
 
     const takeOptions = takeSourceOptions.map(opt => ({
       label: opt.label,
       value: opt.value,
+      emoji: (opt as any).emoji,
       default: opt.label === takeVal,
     }));
 
@@ -265,10 +274,11 @@ export async function showCryptoAmountModal(interaction: ButtonInteraction) {
   const embedForm = message.embeds[1];
   const fields = embedForm.fields;
 
-  const payCurrencyLabel = fields[1] ? fields[1].value : '未選択';
-  const takeCurrencyLabel = fields[2] ? fields[2].value : '未選択';
+  const payCurrencyLabel = fields[1] ? fields[1].value.replace(/<:[^:]+:\d+>\s*/, '') : '未選択';
+  const takeCurrencyLabel = fields[2] ? fields[2].value.replace(/<:[^:]+:\d+>\s*/, '') : '未選択';
 
-  const paySymbol = getCryptoSymbolFromLabel(payCurrencyLabel);
+  const payOption = exchangeOptions.find(opt => opt.label === payCurrencyLabel);
+  const paySymbol = payOption ? payOption.value : getCryptoSymbolFromLabel(payCurrencyLabel);
   
   const takeOption = exchangeOptions.find(opt => opt.label === takeCurrencyLabel);
   const takeSymbol = takeOption ? takeOption.value : getCryptoSymbolFromLabel(takeCurrencyLabel);
@@ -301,8 +311,10 @@ export async function handleAmountModalSubmit(interaction: ModalSubmitInteractio
   const customId = interaction.customId;
   const parts = customId.split(':');
   const mode = parts[1] || 'pay';
-  const paySymbol = parts[2].toUpperCase();
-  const takeSymbol = parts[3];
+  let paySymbol = parts[2].toUpperCase();
+  if (paySymbol === 'TETHER') paySymbol = 'USDT';
+  let takeSymbol = parts[3];
+  if (takeSymbol.toUpperCase() === 'TETHER') takeSymbol = 'USDT';
 
   const jpyAmountStr = interaction.fields.getTextInputValue('crypto_jpy_amount');
   const jpyAmount = parseFloat(jpyAmountStr);
@@ -383,16 +395,16 @@ export async function handleAmountModalSubmit(interaction: ModalSubmitInteractio
 
       const embedForm = new EmbedBuilder()
         .setTitle(`📊 交換のお見積もり内容 ${specifiedModeLabel}`)
-        .setDescription(`暗号通貨（${paySymbol}）から日本円（${takeLabel}）へのお見積もりです。\n内容に間違いがなければ、下のボタンを押してお支払いリンクを発行してください。`)
+        .setDescription(`暗号通貨（${formatWithEmoji(paySymbol)}）から日本円（${formatWithEmoji(takeLabel)}）へのお見積もりです。\n内容に間違いがなければ、下のボタンを押してお支払いリンクを発行してください。`)
         .addFields(
           { 
             name: '📤 支払う額', 
-            value: `${Math.round(payJpyAmount).toLocaleString()} 円, $${usdAmount.toFixed(2)}\n${payAmount.toFixed(6)} ${paySymbol}`, 
+            value: `${Math.round(payJpyAmount).toLocaleString()} 円, $${usdAmount.toFixed(2)}\n${payAmount.toFixed(6)} ${formatWithEmoji(paySymbol)}`, 
             inline: true 
           },
           { 
             name: '📥 受け取る額', 
-            value: `${Math.round(takeJpyValue).toLocaleString()} 円 (${takeLabel})`, 
+            value: `${Math.round(takeJpyValue).toLocaleString()} 円 (${formatWithEmoji(takeLabel)})`, 
             inline: true 
           }
         )
@@ -419,7 +431,156 @@ export async function handleAmountModalSubmit(interaction: ModalSubmitInteractio
         .setTitle('📈 適用レート情報')
         .addFields(
           { name: '🇺🇸 USD/JPY', value: `${usdJpyRate.toFixed(2)} 円 / 1$`, inline: true },
-          { name: `🪙 ${paySymbol}/USD`, value: `${Math.round(payPrice * usdJpyRate).toLocaleString()} 円 ($${payPrice.toFixed(2)}) / 1 ${paySymbol}`, inline: true }
+          { name: `${getEmojiPrefix(paySymbol) || '🪙 '}${paySymbol}/USD`, value: `${Math.round(payPrice * usdJpyRate).toLocaleString()} 円 ($${payPrice.toFixed(2)}) / 1 ${paySymbol}`, inline: true }
+        )
+        .setColor('#0099ff');
+
+      const row = new ActionRowBuilder<ButtonBuilder>().addComponents(backButton, proceedButton, closeButton);
+
+      if (interaction.message) {
+        await interaction.message.edit({
+          embeds: [embedInfo!, rateEmbed, embedForm],
+          components: [row]
+        });
+      }
+
+      await interaction.editReply({ content: '見積もりの算出が完了しました。チャンネルをご確認ください。' });
+      return;
+    }
+
+    const isPayFiat = fiatGiveOptions.some(opt => opt.value === paySymbol.toLowerCase() || opt.value === paySymbol);
+
+    if (isPayFiat) {
+      const takeSymbolUpper = takeSymbol.toUpperCase();
+      const pricesResponse = await requestOxaPay('GET', '/common/prices', null, merchantKey);
+      if (pricesResponse.status !== 200) {
+        throw new Error(pricesResponse.message || 'Failed to fetch coin prices');
+      }
+      const prices = pricesResponse.data || {};
+      const takePrice = prices[takeSymbolUpper] || prices[takeSymbol.toLowerCase()];
+
+      if (!takePrice) {
+        throw new Error(`Price not found for ${takeSymbolUpper}`);
+      }
+
+      const currenciesResponse = await requestOxaPay('GET', '/common/currencies', null, merchantKey);
+      if (currenciesResponse.status !== 200) {
+        throw new Error(currenciesResponse.message || 'Failed to fetch coin configurations');
+      }
+      const currencyData = currenciesResponse.data || {};
+      
+      let withdrawFee = 0;
+      const takeCoinInfo = currencyData[takeSymbolUpper] || currencyData[takeSymbol.toLowerCase()];
+      if (takeCoinInfo && takeCoinInfo.networks) {
+        let networkKey = Object.keys(takeCoinInfo.networks)[0];
+        if (takeSymbolUpper === 'USDT' && takeCoinInfo.networks['Ethereum']) {
+          networkKey = 'Ethereum';
+        }
+        const netInfo = takeCoinInfo.networks[networkKey];
+        if (netInfo) {
+          withdrawFee = parseFloat(netInfo.withdraw_fee) || 0;
+        }
+      }
+
+      const fiatFeeRate = getSystemFeeRate('fiat_to_crypto');
+      const minSystemFeeUsd = 1.0;
+
+      let usdAmount = 0;
+      let payJpyAmount = 0;
+      let finalTakeAmount = 0;
+      let takeUsdValue = 0;
+
+      if (mode === 'pay') {
+        payJpyAmount = jpyAmount;
+        usdAmount = payJpyAmount / usdJpyRate;
+        
+        const systemFeeUsd = Math.max(usdAmount * fiatFeeRate, minSystemFeeUsd);
+        const afterSystemFeeUsd = usdAmount - systemFeeUsd;
+        const afterSystemFeeCrypto = afterSystemFeeUsd / takePrice;
+        finalTakeAmount = afterSystemFeeCrypto - withdrawFee;
+
+        if (finalTakeAmount <= 0) {
+          const withdrawFeeInUsd = withdrawFee * takePrice;
+          const minRequiredUsd = 1.0 + withdrawFeeInUsd;
+          const minRequiredJpy = minRequiredUsd * usdJpyRate;
+
+          await interaction.editReply({
+            content: `⚠️ 金額が少なすぎます。\n入力された金額は、システム手数料（最小1.00$ / 約150円）、および送金手数料（${withdrawFee} ${takeSymbolUpper} = 約$${withdrawFeeInUsd.toFixed(2)}）を支払える金額（約 ${Math.ceil(minRequiredJpy).toLocaleString()} 円以上）である必要があります。`
+          });
+          return;
+        }
+        takeUsdValue = finalTakeAmount * takePrice;
+      } else {
+        const takeJpyValue = jpyAmount;
+        takeUsdValue = takeJpyValue / usdJpyRate;
+        finalTakeAmount = takeUsdValue / takePrice;
+
+        const afterSystemFeeCrypto = finalTakeAmount + withdrawFee;
+        const afterSystemFeeUsd = afterSystemFeeCrypto * takePrice;
+
+        let payUsdAmount = afterSystemFeeUsd / (1.0 - fiatFeeRate);
+        if (payUsdAmount * fiatFeeRate < minSystemFeeUsd) {
+          payUsdAmount = afterSystemFeeUsd + minSystemFeeUsd;
+        }
+
+        usdAmount = payUsdAmount;
+        payJpyAmount = usdAmount * usdJpyRate;
+      }
+
+      const takeJpyValueCheck = takeUsdValue * usdJpyRate;
+
+      if (takeJpyValueCheck < 300) {
+        await interaction.editReply({
+          content: `⚠️ 金額が少なすぎます。\n**受け取る額が最低でも 300 円以上**になるように指定してください。`
+        });
+        return;
+      }
+
+      const payOption = fiatGiveOptions.find(opt => opt.value === paySymbol.toLowerCase());
+      const payLabel = payOption ? payOption.label : paySymbol;
+
+      const embedInfo = interaction.message?.embeds[0];
+      const specifiedModeLabel = mode === 'pay' ? '（支払う額を指定）' : '（受け取りたい額を指定）';
+
+      const embedForm = new EmbedBuilder()
+        .setTitle(`📊 交換のお見積もり内容 ${specifiedModeLabel}`)
+        .setDescription('システム手数料、および送金手数料（ブロックチェーン手数料）を考慮した見積もりです。\n内容に間違いがなければ、下のボタンを押して「送金先アドレス」を入力してください。')
+        .addFields(
+          { 
+            name: '📤 支払う額', 
+            value: `${Math.round(payJpyAmount).toLocaleString()} 円 (${formatWithEmoji(payLabel)})\n$${usdAmount.toFixed(2)} 相当`, 
+            inline: true 
+          },
+          { 
+            name: '📥 受け取る額', 
+            value: `約 ${Math.round(takeUsdValue * usdJpyRate).toLocaleString()} 円, $${takeUsdValue.toFixed(2)}\n約 ${finalTakeAmount.toFixed(6)} ${formatWithEmoji(takeSymbolUpper)}\n*※この数値はあくまで予想であるため、実際の受取数量は多少上下する可能性があります。*`, 
+            inline: true 
+          }
+        )
+        .setColor('#ffaa00');
+
+      const backButton = new ButtonBuilder()
+        .setCustomId(`reset_amount_choice:${paySymbol.toLowerCase()}:${takeSymbolUpper}`)
+        .setLabel('◀️ 戻る（金額再入力）')
+        .setStyle(ButtonStyle.Secondary);
+
+      const proceedButton = new ButtonBuilder()
+        .setCustomId(`proceed_address:${paySymbol.toLowerCase()}:${takeSymbolUpper}:${Math.round(payJpyAmount)}:${usdAmount.toFixed(2)}:0:${finalTakeAmount.toFixed(8)}`)
+        .setLabel('この内容で進む（アドレス入力）')
+        .setStyle(ButtonStyle.Success)
+        .setEmoji('➡️');
+
+      const closeButton = new ButtonBuilder()
+        .setCustomId('close_ticket')
+        .setLabel('チケットを閉じる')
+        .setStyle(ButtonStyle.Danger)
+        .setEmoji('🔒');
+
+      const rateEmbed = new EmbedBuilder()
+        .setTitle('📈 適用レート情報')
+        .addFields(
+          { name: '🇺🇸 USD/JPY', value: `${usdJpyRate.toFixed(2)} 円 / 1$`, inline: true },
+          { name: `${getEmojiPrefix(takeSymbolUpper) || '🪙 '}${takeSymbolUpper}/USD`, value: `${Math.round(takePrice * usdJpyRate).toLocaleString()} 円 ($${takePrice.toFixed(2)}) / 1 ${takeSymbolUpper}`, inline: true }
         )
         .setColor('#0099ff');
 
@@ -460,10 +621,8 @@ export async function handleAmountModalSubmit(interaction: ModalSubmitInteractio
     const takeCoinInfo = currencyData[takeSymbolUpper] || currencyData[takeSymbol.toLowerCase()];
     if (takeCoinInfo && takeCoinInfo.networks) {
       let networkKey = Object.keys(takeCoinInfo.networks)[0];
-      if (takeSymbolUpper === 'USDT' && takeCoinInfo.networks['TRON']) {
-        networkKey = 'TRON';
-      } else if (takeSymbolUpper === 'USDT' && takeCoinInfo.networks['BSC']) {
-        networkKey = 'BSC';
+      if (takeSymbolUpper === 'USDT' && takeCoinInfo.networks['Ethereum']) {
+        networkKey = 'Ethereum';
       }
       const netInfo = takeCoinInfo.networks[networkKey];
       if (netInfo) {
@@ -576,12 +735,12 @@ export async function handleAmountModalSubmit(interaction: ModalSubmitInteractio
       .addFields(
         { 
           name: '📤 支払う額', 
-          value: `${Math.round(payJpyAmount).toLocaleString()} 円, $${usdAmount.toFixed(2)}\n${payAmount.toFixed(6)} ${paySymbol}`, 
+          value: `${Math.round(payJpyAmount).toLocaleString()} 円, $${usdAmount.toFixed(2)}\n${payAmount.toFixed(6)} ${formatWithEmoji(paySymbol)}`, 
           inline: true 
         },
         { 
           name: '📥 受け取る額', 
-          value: `約 ${Math.round(takeJpyValue).toLocaleString()} 円, $${takeUsdValue.toFixed(2)}\n約 ${finalTakeAmount.toFixed(6)} ${takeSymbolUpper}\n*※この数値はあくまで予想であるため、実際の受取数量は多少上下する可能性があります。*`, 
+          value: `約 ${Math.round(takeJpyValue).toLocaleString()} 円, $${takeUsdValue.toFixed(2)}\n約 ${finalTakeAmount.toFixed(6)} ${formatWithEmoji(takeSymbolUpper)}\n*※この数値はあくまで予想であるため、実際の受取数量は多少上下する可能性があります。*`, 
           inline: true 
         }
       )
@@ -608,8 +767,8 @@ export async function handleAmountModalSubmit(interaction: ModalSubmitInteractio
       .setTitle('📈 適用レート情報')
       .addFields(
         { name: '🇺🇸 USD/JPY', value: `${usdJpyRate.toFixed(2)} 円 / 1$`, inline: true },
-        { name: `🪙 ${paySymbol}/USD`, value: `${Math.round(payPrice * usdJpyRate).toLocaleString()} 円 ($${payPrice.toFixed(2)}) / 1 ${paySymbol}`, inline: true },
-        { name: `🪙 ${takeSymbolUpper}/USD`, value: `${Math.round(takePrice * usdJpyRate).toLocaleString()} 円 ($${takePrice.toFixed(2)}) / 1 ${takeSymbolUpper}`, inline: true }
+        { name: `${getEmojiPrefix(paySymbol) || '🪙 '}${paySymbol}/USD`, value: `${Math.round(payPrice * usdJpyRate).toLocaleString()} 円 ($${payPrice.toFixed(2)}) / 1 ${paySymbol}`, inline: true },
+        { name: `${getEmojiPrefix(takeSymbolUpper) || '🪙 '}${takeSymbolUpper}/USD`, value: `${Math.round(takePrice * usdJpyRate).toLocaleString()} 円 ($${takePrice.toFixed(2)}) / 1 ${takeSymbolUpper}`, inline: true }
       )
       .setColor('#0099ff');
 
@@ -752,8 +911,10 @@ export async function handleProceedFiatInvoiceSubmit(interaction: ButtonInteract
 export async function showCryptoAddressModal(interaction: ButtonInteraction) {
   const customId = interaction.customId;
   const parts = customId.split(':');
-  const paySymbol = parts[1].toUpperCase();
-  const takeSymbol = parts[2].toUpperCase();
+  let paySymbol = parts[1].toUpperCase();
+  if (paySymbol === 'TETHER') paySymbol = 'USDT';
+  let takeSymbol = parts[2].toUpperCase();
+  if (takeSymbol === 'TETHER') takeSymbol = 'USDT';
   const jpyAmount = parts[3];
   const usdAmount = parts[4];
   const payAmount = parts[5];
@@ -782,8 +943,10 @@ export async function showCryptoAddressModal(interaction: ButtonInteraction) {
 export async function handleAddressModalSubmit(interaction: ModalSubmitInteraction) {
   const customId = interaction.customId;
   const parts = customId.split(':');
-  const paySymbol = parts[1].toUpperCase();
-  const takeSymbol = parts[2].toUpperCase();
+  let paySymbol = parts[1].toUpperCase();
+  if (paySymbol === 'TETHER') paySymbol = 'USDT';
+  let takeSymbol = parts[2].toUpperCase();
+  if (takeSymbol === 'TETHER') takeSymbol = 'USDT';
   const jpyAmount = parseFloat(parts[3]);
   const usdAmount = parseFloat(parts[4]);
   const payAmount = parseFloat(parts[5]);
@@ -816,6 +979,89 @@ export async function handleAddressModalSubmit(interaction: ModalSubmitInteracti
     }
     const takeUsdValue = finalTakeAmount * takePrice;
     const takeJpyValue = takeUsdValue * currentUsdJpyRate;
+
+    const isPayFiat = fiatGiveOptions.some(opt => opt.value === paySymbol.toLowerCase() || opt.value === paySymbol);
+
+    if (isPayFiat) {
+      const paymentData = {
+        paySymbol,
+        takeSymbol,
+        finalTakeAmount: parseFloat(finalTakeAmount.toFixed(8)),
+        userAddress,
+        jpyAmount: Math.round(jpyAmount),
+        usdAmount: parseFloat(usdAmount.toFixed(2)),
+        payAmount: 0,
+        userId: interaction.user.id
+      };
+
+      const embedInfo = interaction.message?.embeds[0];
+      const payOption = fiatGiveOptions.find(opt => opt.value === paySymbol.toLowerCase());
+      const payLabel = payOption ? payOption.label : paySymbol;
+
+      const isLinkNeeded = paySymbol.toLowerCase() === 'paypay' || paySymbol.toLowerCase() === 'rakuten_pay';
+
+      const embedForm = new EmbedBuilder()
+        .setTitle('送金手続きへ進みます')
+        .setDescription(isLinkNeeded ? `以下のボタンから、${payLabel}の「ポチ袋 / 送金リンク」と「パスワード」を入力してください。` : `スタッフが指定する口座・支払い先等への案内をお待ちください。\n\n支払いが完了しましたら、スタッフが入金確認後、指定のアドレスへ自動送金が行われます。`)
+        .addFields(
+          { 
+            name: '📤 支払う額', 
+            value: `${Math.round(jpyAmount).toLocaleString()} 円 (${payLabel})`, 
+            inline: true 
+          },
+          { 
+            name: '📥 受け取る額', 
+            value: `約 ${Math.round(takeJpyValue).toLocaleString()} 円, $${takeUsdValue.toFixed(2)}\n約 ${finalTakeAmount.toFixed(6)} ${takeSymbol}\n*※この数値はあくまで予想であるため、実際の受取数量は多少上下する可能性があります。*`, 
+            inline: true 
+          },
+          { 
+            name: '📌 送金先アドレス', 
+            value: `\`${userAddress}\``, 
+            inline: false 
+          }
+        )
+        .setColor('#ffaa00')
+        .setFooter({ text: `PaymentData: ${JSON.stringify(paymentData)}` });
+
+      const buttons: ButtonBuilder[] = [];
+
+      if (isLinkNeeded) {
+        buttons.push(
+          new ButtonBuilder()
+            .setCustomId('fiat_receive_input_link')
+            .setLabel('ポチ袋/送金情報を入力する')
+            .setStyle(ButtonStyle.Primary)
+            .setEmoji('🔗')
+        );
+      } else {
+        buttons.push(
+          new ButtonBuilder()
+            .setCustomId(`fiat_receive_staff_confirm`)
+            .setLabel('✅ 支払い完了 (サポート専用)')
+            .setStyle(ButtonStyle.Success)
+        );
+      }
+
+      const closeButton = new ButtonBuilder()
+        .setCustomId('close_ticket')
+        .setLabel('チケットを閉じる')
+        .setStyle(ButtonStyle.Danger)
+        .setEmoji('🔒');
+
+      buttons.push(closeButton);
+
+      const rowAction = new ActionRowBuilder<ButtonBuilder>().addComponents(...buttons);
+
+      if (interaction.message) {
+        await interaction.message.edit({
+          embeds: [embedInfo!, embedForm],
+          components: [rowAction]
+        });
+      }
+
+      await interaction.editReply({ content: 'アドレスを保存しました。画面の案内に従って支払い手続きを進めてください。' });
+      return;
+    }
 
     const invoiceData: any = {
       amount: usdAmount,

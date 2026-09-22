@@ -24,8 +24,15 @@ import {
   handleFiatSendCompleteButton,
   handleFiatReceiveCompleteButton,
   handleFiatSendModalSubmit,
-  updateUsdJpyRate
+  updateUsdJpyRate,
+  handleFiatReceiveInputLink,
+  handleFiatReceiveInputSubmit,
+  handleFiatReceiveStaffConfirm,
+  handleFiatReceiveConfirmed
 } from './ticket';
+import { startWebServer } from './web/server';
+import { getTotalUsdVolume, getTotalJpyVolume } from './transactions';
+import { currentUsdJpyRate } from './config';
 
 dotenv.config();
 
@@ -86,18 +93,20 @@ async function registerCommands() {
   }
 }
 
-client.once('ready', async () => {
+client.once('clientReady', async () => {
   console.log(`Logged in as ${client.user?.tag}!`);
 
   try {
     await updateUsdJpyRate();
+    await updateStatsVC(client);
     setInterval(async () => {
       try {
         await updateUsdJpyRate();
+        await updateStatsVC(client);
       } catch (err) {
-        console.error('Error in scheduled updateUsdJpyRate:', err);
+        console.error('Error in scheduled updateUsdJpyRate/StatsVC:', err);
       }
-    }, 30000);
+    }, 720000); // 12分に1回 (12 * 60 * 1000)
   } catch (err) {
     console.error('Failed to initialize USD_JPY rate:', err);
   }
@@ -225,6 +234,24 @@ client.on('interactionCreate', async (interaction) => {
       } catch (error) {
         console.error('Error processing fiat receive complete:', error);
       }
+    } else if (interaction.customId === 'fiat_receive_input_link') {
+      try {
+        await handleFiatReceiveInputLink(interaction);
+      } catch (error) {
+        console.error('Error opening fiat receive input link modal:', error);
+      }
+    } else if (interaction.customId === 'fiat_receive_staff_confirm') {
+      try {
+        await handleFiatReceiveStaffConfirm(interaction);
+      } catch (error) {
+        console.error('Error processing fiat receive staff confirm:', error);
+      }
+    } else if (interaction.customId === 'fiat_receive_confirmed') {
+      try {
+        await handleFiatReceiveConfirmed(interaction);
+      } catch (error) {
+        console.error('Error processing fiat receive confirmed:', error);
+      }
     }
   } else if (interaction.isStringSelectMenu()) {
     if (interaction.customId === 'exchange_type') {
@@ -259,6 +286,12 @@ client.on('interactionCreate', async (interaction) => {
       } catch (error) {
         console.error('Error processing fiat send modal submit:', error);
       }
+    } else if (interaction.customId === 'fiat_receive_modal_submit') {
+      try {
+        await handleFiatReceiveInputSubmit(interaction);
+      } catch (error) {
+        console.error('Error processing fiat receive modal submit:', error);
+      }
     }
   }
 });
@@ -266,3 +299,29 @@ client.on('interactionCreate', async (interaction) => {
 client.login(token).catch((error) => {
   console.error('Failed to login to Discord:', error);
 });
+
+async function updateStatsVC(client: Client) {
+  const channelId = process.env.STATS_VC_CHANNEL_ID;
+  if (!channelId) return;
+
+  const totalUsd = getTotalUsdVolume();
+  if (totalUsd === 0) return;
+
+  const totalJpy = getTotalJpyVolume(currentUsdJpyRate);
+  
+  const formattedUsd = totalUsd.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const name = `Total : ${Math.round(totalJpy).toLocaleString()}円(${formattedUsd}$)`;
+
+  try {
+    const channel = await client.channels.fetch(channelId);
+    if (channel && channel.isVoiceBased()) {
+      await channel.setName(name);
+      console.log(`[Stats VC] Updated channel name to: ${name}`);
+    }
+  } catch (err: any) {
+    console.error(`[Stats VC] Failed to update channel name:`, err.message);
+  }
+}
+
+// Start web server for ticket logs
+startWebServer();

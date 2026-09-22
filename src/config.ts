@@ -62,29 +62,29 @@ export function stopPollingForChannel(channelId: string) {
 
 // Fiat (日本円 - 支払用：すべて)
 export const fiatGiveOptions = [
-  { label: 'Paypay', value: 'paypay' },
-  { label: '楽天pay', value: 'rakuten_pay' },
-  { label: 'Amazon Gift Card (日本円のみ)', value: 'amazon_gift' },
-  { label: 'Kyash', value: 'kyash' },
-  { label: '銀行振込 (匿名 楽天銀行)', value: 'bank' },
-  { label: 'Revolut', value: 'revolut' },
+  { label: 'Paypay', value: 'paypay', emoji: { id: '1537463421941846026', name: 'paypay' } },
+  { label: '楽天pay', value: 'rakuten_pay', emoji: { id: '1537463450928677014', name: 'rakuten_pay' } },
+  { label: 'Amazon Gift Card (日本円のみ)', value: 'amazon_gift', emoji: { id: '1537463344112472254', name: 'amazon' } },
+  { label: 'Kyash', value: 'kyash', emoji: { id: '1537463393458327632', name: 'kyash' } },
+  { label: '銀行振込 (匿名 楽天銀行)', value: 'bank', emoji: { id: '1537463368091308032', name: 'bank' } },
+  { label: 'Revolut', value: 'revolut', emoji: { id: '1537463518666694806', name: 'Revolut' } },
 ];
 
 // Fiat (日本円 - 受取用：支払のみの項目を除外)
 export const fiatTakeOptions = [
-  { label: 'Paypay', value: 'paypay' },
-  { label: '楽天pay', value: 'rakuten_pay' },
+  { label: 'Paypay', value: 'paypay', emoji: { id: '1537463421941846026', name: 'paypay' } },
+  { label: '楽天pay', value: 'rakuten_pay', emoji: { id: '1537463450928677014', name: 'rakuten_pay' } },
 ];
 
 // Crypto (暗号通貨) の選択肢一覧 (Tronを削除)
 export const cryptoOptions = [
-  { label: 'BTC (bitcoin:ビットコイン)', value: 'btc' },
-  { label: 'LTC (litecoin:ライトコイン)', value: 'ltc' },
-  { label: 'ETH (etherium:イーサリアム)', value: 'eth' },
-  { label: 'SOL (solana:ソラナ)', value: 'sol' },
-  { label: 'XMR (monero:モネロ)', value: 'xmr' },
-  { label: 'Tether (Tether USD)', value: 'tether' },
-  { label: 'DAI', value: 'dai' },
+  { label: 'BTC (bitcoin:ビットコイン)', value: 'btc', emoji: { id: '1537464635840528555', name: 'btc' } },
+  { label: 'LTC (litecoin:ライトコイン)', value: 'ltc', emoji: { id: '1537465492338516128', name: 'ltc' } },
+  { label: 'ETH (etherium:イーサリアム)', value: 'eth', emoji: { id: '1537464838790455437', name: 'eth' } },
+  { label: 'SOL (solana:ソラナ)', value: 'sol', emoji: { id: '1537464642329378936', name: 'sol' } },
+  { label: 'XMR (monero:モネロ)', value: 'xmr', emoji: { id: '1537464645982355506', name: 'xmr' } },
+  { label: 'Tether (Tether USD)', value: 'usdt', emoji: { id: '1537464644069892147', name: 'usdt' } },
+  { label: 'DAI', value: 'dai', emoji: { id: '1537464637350617208', name: 'dai' } },
 ];
 
 // 共通オプション（マージ、検索用）
@@ -125,16 +125,39 @@ export function getCryptoSymbolFromLabel(label: string): string {
   return 'USDT';
 }
 
+// 絵文字プレフィックス取得用
+export function getEmojiPrefix(val: string): string {
+  const opt = exchangeOptions.find(o => 
+    o.value.toLowerCase() === val.toLowerCase() || 
+    o.label.toLowerCase() === val.toLowerCase() ||
+    o.label.includes(val) ||
+    (val.toUpperCase() === 'USDT' && o.value === 'usdt')
+  );
+  if (opt && (opt as any).emoji && (opt as any).emoji.id) {
+    const e = (opt as any).emoji;
+    return `<:${e.name}:${e.id}> `;
+  }
+  return '';
+}
+
+export function formatWithEmoji(val: string): string {
+  return getEmojiPrefix(val) + val;
+}
+
 /**
- * Frankfurter API から最新のドル円レートを取得して更新する
+ * ER-API から最新のドル円レートを取得して更新する
  */
 export function updateUsdJpyRate(): Promise<number> {
   return new Promise((resolve) => {
-    const url = 'https://api.frankfurter.dev/v1/latest?from=USD&to=JPY';
+    const url = 'https://open.er-api.com/v6/latest/USD';
     https.get(url, (res) => {
       let body = '';
       res.on('data', (chunk) => body += chunk);
       res.on('end', () => {
+        if (res.statusCode !== 200) {
+          console.warn(`[Rate Monitor] ER-API returned status ${res.statusCode}. Keeping previous rate: ${currentUsdJpyRate}`);
+          return resolve(currentUsdJpyRate);
+        }
         try {
           const parsed = JSON.parse(body);
           if (parsed && parsed.rates && typeof parsed.rates.JPY === 'number') {
@@ -142,16 +165,16 @@ export function updateUsdJpyRate(): Promise<number> {
 // ログ出力を削除
             resolve(currentUsdJpyRate);
           } else {
-            console.error('[Rate Monitor] Invalid response format:', body);
+            console.error('[Rate Monitor] Invalid response format from ER-API:', body);
             resolve(currentUsdJpyRate);
           }
         } catch (e) {
-          console.error('[Rate Monitor] Failed to parse Frankfurter API response:', e);
+          console.error('[Rate Monitor] Failed to parse ER-API response:', e);
           resolve(currentUsdJpyRate);
         }
       });
-    }).on('error', (err) => {
-      console.error('[Rate Monitor] Request error from Frankfurter API:', err);
+    }).on('error', (e) => {
+      console.error('[Rate Monitor] Failed to fetch rate from ER-API:', e);
       resolve(currentUsdJpyRate);
     });
   });
